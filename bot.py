@@ -46,7 +46,7 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM movies")
     if cursor.fetchone()[0] == 0:
         movies = [
-            ("INT001", 2, "Interstellar", 2014),
+            ("67", 2, "After", 2024),
         ]
         cursor.executemany("INSERT INTO movies VALUES (?, ?, ?, ?)", movies)
     
