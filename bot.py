@@ -46,8 +46,9 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM movies")
     if cursor.fetchone()[0] == 0:
         movies = [
-            ("INT001", 2, "After", 2024),
+            ("56", 2, "After",2019),
 ("12",3,"The black phone 2",2025),
+("45",4,"The kissing booth 1",2018),
         ]
         cursor.executemany("INSERT INTO movies VALUES (?, ?, ?, ?)", movies)
     
@@ -177,7 +178,7 @@ def process_update(update):
                         chat_id,
                         f"🎬 *Welcome, {first_name}!*\n\n"
                         "📌 *Available Movies:*\n"
-                        "• `INT001` - Interstellar\n\n"
+                        "• `56` - After (2019)\n\n"
                         "🔍 *How to Get a Movie:*\n"
                         "1️⃣ Subscribe to our channel\n"
                         "2️⃣ Enter the movie code\n\n"
