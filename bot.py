@@ -47,6 +47,7 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         movies = [
             ("INT001", 2, "After", 2024),
+("12",3,"The black phone 2"),
         ]
         cursor.executemany("INSERT INTO movies VALUES (?, ?, ?, ?)", movies)
     
