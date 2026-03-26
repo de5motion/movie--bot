@@ -4,7 +4,6 @@ from datetime import datetime
 import os
 import threading
 import time
-from functools import lru_cache
 from flask import Flask, request, jsonify
 import requests
 
@@ -13,7 +12,6 @@ TOKEN = "8660161351:AAGdM3sN3Sfi3zd8T0e_AOeFjhwAczQDyHw"
 PRIVATE_CHANNEL = -1003800629563
 PUBLIC_CHANNEL = "@englishmoviews"
 PUBLIC_CHANNEL2 = "@obshaga_life"
-ADMIN_PASSWORD = "admin123"
 
 # ===== INITIALIZE FLASK =====
 app = Flask(__name__)
@@ -24,7 +22,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ===== GLOBAL DATABASE CONNECTION =====
+# ===== DATABASE =====
 _db = None
 _db_lock = threading.Lock()
 
@@ -35,57 +33,8 @@ def get_db():
             if _db is None:
                 _db = sqlite3.connect('movies.db', check_same_thread=False)
                 _db.row_factory = sqlite3.Row
-                logging.info("Database connection established")
     return _db
 
-# ===== CACHE =====
-_movies_cache = {}
-_cache_time = 0
-_subscription_cache = {}
-_subscription_cache_time = {}
-
-def get_movie_cached(code):
-    global _movies_cache, _cache_time
-    now = time.time()
-    
-    if not _movies_cache or (now - _cache_time) > 300:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT code, message_id, title, year, subtitles_id FROM movies")
-        rows = cursor.fetchall()
-        _movies_cache = {row["code"]: row for row in rows}
-        _cache_time = now
-        logging.info(f"Cache updated with {len(_movies_cache)} movies")
-    
-    return _movies_cache.get(code.upper())
-
-def check_subscription_cached(user_id):
-    global _subscription_cache, _subscription_cache_time
-    now = time.time()
-    
-    if user_id in _subscription_cache:
-        if (now - _subscription_cache_time.get(user_id, 0)) < 60:
-            return _subscription_cache[user_id]
-    
-    result = check_subscription_real(user_id)
-    _subscription_cache[user_id] = result
-    _subscription_cache_time[user_id] = now
-    return result
-
-# ===== KEEP-ALIVE =====
-def keep_alive():
-    while True:
-        time.sleep(600)
-        try:
-            app_name = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
-            if app_name != 'localhost':
-                requests.get(f"https://{app_name}/health", timeout=5)
-        except:
-            pass
-
-threading.Thread(target=keep_alive, daemon=True).start()
-
-# ===== DATABASE INITIALIZATION =====
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
@@ -113,19 +62,36 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM movies")
     if cursor.fetchone()[0] == 0:
         movies = [
-            ("56",2, "After", 2019, 12),
-            ("12",3, "The Black Phone 2", 2025, 11),
-            ("45",4, "The Kissing Booth 1", 2018, 0),
-            ("22",10, "Sidelined: The QB and Me", 2024, 13),
-            ("89",9, "Wyrmwood: Apocalypse", 2021, 0),
+            ("56", 2, "After", 2019, 12),
+            ("12", 3, "The Black Phone 2", 2025, 11),
+            ("45", 4, "The Kissing Booth 1", 2018, 0),
+            ("22", 10, "Sidelined: The QB and Me", 2024, 13),
+            ("89", 9, "Wyrmwood: Apocalypse", 2021, 0),
         ]
         cursor.executemany("INSERT INTO movies VALUES (?, ?, ?, ?, ?)", movies)
-        logging.info("Initial movies added")
     
     conn.commit()
     logging.info("Database initialized")
 
 init_db()
+
+# ===== CACHE =====
+_movies_cache = {}
+_cache_time = 0
+
+def get_movie_cached(code):
+    global _movies_cache, _cache_time
+    now = time.time()
+    
+    if not _movies_cache or (now - _cache_time) > 300:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT code, message_id, title, year, subtitles_id FROM movies")
+        rows = cursor.fetchall()
+        _movies_cache = {row["code"]: row for row in rows}
+        _cache_time = now
+    
+    return _movies_cache.get(code.upper())
 
 # ===== HELPER FUNCTIONS =====
 def send_message(chat_id, text, reply_markup=None):
@@ -139,22 +105,14 @@ def send_message(chat_id, text, reply_markup=None):
         logging.error(f"Error sending message: {e}")
         return None
 
-def send_movie_fast(chat_id, message_id, title, code, year, subtitles_id=None):
+def send_movie(chat_id, message_id, title, code, year, subtitles_id=None):
     url = f"https://api.telegram.org/bot{TOKEN}/copyMessage"
     
-    subtitles_instruction = (
-        "\n\n📝 *How to add subtitles:*\n"
-        "1️⃣ Download the .srt file from the next message\n"
-        "2️⃣ Open the video in Telegram\n"
-        "3️⃣ Tap the '⋮' (three dots) menu\n"
-        "4️⃣ Select 'Add subtitle'\n"
-        "5️⃣ Choose the downloaded .srt file\n\n"
-        "💡 *Alternative:* Use VLC or MX Player"
-    )
-    
     caption = f"🎬 *{title}* ({year})\n🔑 Code: `{code}`"
+    
     if subtitles_id and subtitles_id != 0:
-        caption += subtitles_instruction
+        caption += "\n\n📝 *Subtitles* will be sent after the video.\n"
+        caption += "To add: open video → tap '⋮' → 'Add subtitle'"
     
     movie_data = {
         "chat_id": chat_id,
@@ -170,24 +128,23 @@ def send_movie_fast(chat_id, message_id, title, code, year, subtitles_id=None):
             "chat_id": chat_id,
             "from_chat_id": PRIVATE_CHANNEL,
             "message_id": subtitles_id,
-            "caption": "📝 *Subtitles File*\n\nDownload and add to video player.",
+            "caption": "📝 *Subtitles File*",
             "parse_mode": "Markdown"
         }
         requests.post(url, json=sub_data, timeout=10)
-        logging.info(f"Subtitles sent for {code}")
     
     return result
 
-def check_subscription_real(user_id):
+def check_subscription(user_id):
     url = f"https://api.telegram.org/bot{TOKEN}/getChatMember"
     try:
         r1 = requests.get(url, params={"chat_id": PUBLIC_CHANNEL, "user_id": user_id}, timeout=10).json()
         r2 = requests.get(url, params={"chat_id": PUBLIC_CHANNEL2, "user_id": user_id}, timeout=10).json()
+        
         sub1 = r1.get("ok") and r1["result"]["status"] in ["member", "administrator", "creator"]
         sub2 = r2.get("ok") and r2["result"]["status"] in ["member", "administrator", "creator"]
         return sub1 and sub2
-    except Exception as e:
-        logging.error(f"Subscription check error: {e}")
+    except:
         return False
 
 def update_user_stats(user_id, username, first_name):
@@ -198,18 +155,6 @@ def update_user_stats(user_id, username, first_name):
         VALUES (?, ?, ?, COALESCE((SELECT requests_count + 1 FROM users WHERE user_id = ?), 1), ?)
     ''', (user_id, username, first_name, user_id, datetime.now()))
     conn.commit()
-
-def get_all_movies_cached():
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT code, title, year FROM movies ORDER BY code")
-    return cursor.fetchall()
-
-def get_user_stats_db(user_id):
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT requests_count, last_active FROM users WHERE user_id = ?", (user_id,))
-    return cursor.fetchone()
 
 # ===== PROCESS UPDATE =====
 def process_update(update):
@@ -247,25 +192,22 @@ def process_update(update):
                     code = text.upper()
                     movie = get_movie_cached(code)
                     
-                    if not check_subscription_cached(user_id):
+                    if not check_subscription(user_id):
                         keyboard = {
                             "inline_keyboard": [
-                                [{"text": "📢 Subscribe Channel 1", "url": f"https://t.me/{PUBLIC_CHANNEL[1:]}"}],
-                                [{"text": "📢 Subscribe Channel 2", "url": f"https://t.me/{PUBLIC_CHANNEL2[1:]}"}]
+                                [{"text": "📢 Subscribe 1", "url": f"https://t.me/{PUBLIC_CHANNEL[1:]}"}],
+                                [{"text": "📢 Subscribe 2", "url": f"https://t.me/{PUBLIC_CHANNEL2[1:]}"}]
                             ]
                         }
                         send_message(
                             chat_id,
-                            f"❌ *Access Denied!*\n\nPlease subscribe to BOTH channels:\n"
-                            f"1️⃣ {PUBLIC_CHANNEL}\n"
-                            f"2️⃣ {PUBLIC_CHANNEL2}\n\n"
-                            f"After subscribing, try again.",
+                            f"❌ *Access Denied!*\n\nSubscribe to:\n{PUBLIC_CHANNEL}\n{PUBLIC_CHANNEL2}",
                             keyboard
                         )
                         return
                     
                     if movie:
-                        result = send_movie_fast(
+                        result = send_movie(
                             chat_id, 
                             movie["message_id"], 
                             movie["title"], 
@@ -275,11 +217,11 @@ def process_update(update):
                         )
                         if result and result.get("ok"):
                             update_user_stats(user_id, username, first_name)
-                            logging.info(f"Movie {code} sent to user {user_id}")
+                            logging.info(f"Movie {code} sent")
                         else:
-                            send_message(chat_id, "❌ Error sending movie. Please try again later.")
+                            send_message(chat_id, "❌ Error sending movie")
                     else:
-                        send_message(chat_id, f"❌ *Invalid Code!*\n\nCode `{code}` not found.\n\nAvailable codes: 56, 12, 45, 22, 89")
+                        send_message(chat_id, f"❌ *Invalid Code!*\n\nCode `{code}` not found.\n\nAvailable: 56, 12, 45, 22, 89")
         
         elif "callback_query" in update:
             callback = update["callback_query"]
@@ -288,241 +230,52 @@ def process_update(update):
             user_id = callback["from"]["id"]
             
             if data == "get_movie":
-                send_message(chat_id, "🔍 *Enter movie code*\n\nAvailable codes: 56, 12, 45, 22, 89")
+                send_message(chat_id, "🔍 *Enter movie code*\n\nAvailable: 56, 12, 45, 22, 89")
             
             elif data == "stats":
-                stats = get_user_stats_db(user_id)
+                conn = get_db()
+                cursor = conn.cursor()
+                cursor.execute("SELECT requests_count, last_active FROM users WHERE user_id = ?", (user_id,))
+                stats = cursor.fetchone()
                 if stats:
-                    text = f"📊 *Your Stats*\n\nMovies received: {stats['requests_count']}\nLast active: {stats['last_active'][:19] if stats['last_active'] else 'Never'}"
+                    send_message(chat_id, f"📊 *Your Stats*\n\nMovies: {stats['requests_count']}")
                 else:
-                    text = "📭 No statistics yet"
-                send_message(chat_id, text)
+                    send_message(chat_id, "📭 No stats yet")
             
             elif data == "movies_list":
-                movies = get_all_movies_cached()
+                conn = get_db()
+                cursor = conn.cursor()
+                cursor.execute("SELECT code, title, year FROM movies ORDER BY code")
+                movies = cursor.fetchall()
                 if movies:
-                    text = "🎬 *Available Movies:*\n\n"
+                    text = "🎬 *Movies:*\n\n"
                     for row in movies:
-                        code = row["code"]
-                        title = row["title"]
-                        year = row["year"]
-                        if code in ["56", "12", "22"]:
-                            text += f"• {title} ({year}) - `{code}` ✅ (subtitles)\n"
-                        else:
-                            text += f"• {title} ({year}) - `{code}`\n"
+                        text += f"• {row['title']} ({row['year']}) - `{row['code']}`\n"
+                    send_message(chat_id, text)
                 else:
-                    text = "📭 No movies available"
-                send_message(chat_id, text)
+                    send_message(chat_id, "📭 No movies")
             
             elif data == "help":
-                text = "ℹ️ *Help & Instructions*\n\n"
-                text += "📌 *How to get a movie:*\n"
-                text += "1️⃣ Subscribe to BOTH channels\n"
-                text += "2️⃣ Enter the movie code\n"
-                text += "3️⃣ Receive video + subtitles (if available)\n\n"
-                text += "🎬 *Available codes:*\n"
-                text += "• `56` - After (with subtitles)\n"
-                text += "• `12` - The Black Phone 2 (with subtitles)\n"
-                text += "• `45` - The Kissing Booth 1\n"
-                text += "• `22` - Sidelined: The QB and Me (with subtitles)\n"
-                text += "• `89` - Wyrmwood: Apocalypse\n\n"
-                text += "📝 *How to add subtitles:*\n"
-                text += "1️⃣ Download the .srt file\n"
-                text += "2️⃣ Open video → tap '⋮' → 'Add subtitle'\n"
-                text += "3️⃣ Select the downloaded file\n\n"
-                text += "📢 *Required channels:*\n"
-                text += f"• {PUBLIC_CHANNEL}\n"
-                text += f"• {PUBLIC_CHANNEL2}\n\n"
-                text += "❓ Need help? Contact channel admins"
+                text = "ℹ️ *Help*\n\n"
+                text += "📌 *Codes:*\n"
+                text += "• 56 - After (with subtitles)\n"
+                text += "• 12 - The Black Phone 2 (with subtitles)\n"
+                text += "• 45 - The Kissing Booth 1\n"
+                text += "• 22 - Sidelined (with subtitles)\n"
+                text += "• 89 - Wyrmwood\n\n"
+                text += "📢 *Subscribe to:*\n"
+                text += f"{PUBLIC_CHANNEL}\n{PUBLIC_CHANNEL2}"
                 send_message(chat_id, text)
     
     except Exception as e:
-        logging.error(f"Error processing update: {e}")
-
-# ===== WEB PANEL =====
-ADD_MOVIE_FORM = '''
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Movie Bot Admin</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 500px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            padding: 30px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        h1 { color: #333; margin-bottom: 10px; font-size: 24px; text-align: center; }
-        .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
-        .form-group { margin-bottom: 20px; }
-        label { display: block; margin-bottom: 8px; color: #333; font-weight: 500; }
-        input { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 16px; }
-        input:focus { outline: none; border-color: #667eea; }
-        button {
-            width: 100%;
-            padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        button:active { transform: scale(0.98); }
-        .message { margin-top: 20px; padding: 12px; border-radius: 10px; display: none; }
-        .message.success { background: #d4edda; color: #155724; }
-        .message.error { background: #f8d7da; color: #721c24; }
-        .info { background: #e7f3ff; padding: 15px; border-radius: 10px; margin-bottom: 20px; font-size: 13px; color: #0066cc; }
-        .movie-list { margin-top: 20px; border-top: 1px solid #e0e0e0; padding-top: 20px; }
-        .movie-item { background: #f8f9fa; padding: 10px; margin-bottom: 8px; border-radius: 8px; font-size: 13px; }
-        .movie-code { font-weight: bold; color: #667eea; }
-        hr { margin: 20px 0; border: none; border-top: 1px solid #e0e0e0; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🎬 Movie Bot Admin</h1>
-        <div class="subtitle">Add new movies to the bot</div>
-        <div class="info">💡 Send video to private channel → copy link (t.me/c/123/5) → ID = 5</div>
-        <form id="addMovieForm">
-            <div class="form-group"><label>🔑 Movie Code *</label><input type="text" id="code" placeholder="Example: 90" required></div>
-            <div class="form-group"><label>📹 Video Message ID *</label><input type="number" id="message_id" placeholder="Example: 2" required></div>
-            <div class="form-group"><label>🎬 Movie Title *</label><input type="text" id="title" placeholder="Movie name" required></div>
-            <div class="form-group"><label>📅 Year *</label><input type="number" id="year" placeholder="2024" required></div>
-            <div class="form-group"><label>📝 Subtitles ID (optional)</label><input type="number" id="subtitles_id" placeholder="Leave 0 if none"></div>
-            <div class="form-group"><label>🔐 Admin Password *</label><input type="password" id="password" placeholder="Enter password" required></div>
-            <button type="submit">➕ Add Movie</button>
-        </form>
-        <div id="message" class="message"></div>
-        <hr>
-        <div class="movie-list"><strong>📋 Current Movies:</strong><div id="movieList">Loading...</div></div>
-        <button onclick="loadMovies()" style="margin-top: 10px; background: #6c757d;">🔄 Refresh</button>
-    </div>
-    <script>
-        async function addMovie(data) {
-            const response = await fetch('/api/add_movie', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify(data)
-            });
-            return response.json();
-        }
-        document.getElementById('addMovieForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const data = {
-                code: document.getElementById('code').value.toUpperCase(),
-                message_id: parseInt(document.getElementById('message_id').value),
-                title: document.getElementById('title').value,
-                year: parseInt(document.getElementById('year').value),
-                subtitles_id: parseInt(document.getElementById('subtitles_id').value) || 0,
-                password: document.getElementById('password').value
-            };
-            const msgDiv = document.getElementById('message');
-            try {
-                const result = await addMovie(data);
-                if (result.status === 'ok') {
-                    msgDiv.className = 'message success';
-                    msgDiv.textContent = '✅ ' + result.message;
-                    document.getElementById('addMovieForm').reset();
-                    loadMovies();
-                } else {
-                    msgDiv.className = 'message error';
-                    msgDiv.textContent = '❌ ' + result.message;
-                }
-            } catch (error) {
-                msgDiv.className = 'message error';
-                msgDiv.textContent = '❌ Error: ' + error.message;
-            }
-            msgDiv.style.display = 'block';
-            setTimeout(() => msgDiv.style.display = 'none', 3000);
-        });
-        async function loadMovies() {
-            try {
-                const response = await fetch('/api/get_movies');
-                const movies = await response.json();
-                const listDiv = document.getElementById('movieList');
-                if (movies.length === 0) listDiv.innerHTML = '<div class="movie-item">No movies yet</div>';
-                else listDiv.innerHTML = movies.map(m => `<div class="movie-item"><span class="movie-code">${m.code}</span> - ${m.title} (${m.year})${m.subtitles_id ? ' 📝' : ''}</div>`).join('');
-            } catch (error) {
-                document.getElementById('movieList').innerHTML = '<div class="movie-item">Error loading</div>';
-            }
-        }
-        loadMovies();
-    </script>
-</body>
-</html>
-'''
+        logging.error(f"Error: {e}")
 
 # ===== FLASK ROUTES =====
-@app.route('/admin')
-def admin_panel():
-    return ADD_MOVIE_FORM
-
-@app.route('/api/add_movie', methods=['POST'])
-def api_add_movie():
-    try:
-        data = request.get_json()
-        
-        if data.get('password') != ADMIN_PASSWORD:
-            return jsonify({'status': 'error', 'message': 'Invalid password'}), 401
-        
-        code = data.get('code', '').upper()
-        message_id = data.get('message_id')
-        title = data.get('title')
-        year = data.get('year')
-        subtitles_id = data.get('subtitles_id', 0)
-        
-        if not all([code, message_id, title, year]):
-            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
-        
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO movies (code, message_id, title, year, subtitles_id)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (code, message_id, title, year, subtitles_id))
-        conn.commit()
-        
-        global _movies_cache, _cache_time
-        _movies_cache = {}
-        _cache_time = 0
-        
-        logging.info(f"Movie added: {code} - {title}")
-        return jsonify({'status': 'ok', 'message': f'Movie "{title}" added with code {code}'})
-    
-    except Exception as e:
-        logging.error(f"Error adding movie: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
-@app.route('/api/get_movies')
-def api_get_movies():
-    try:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT code, title, year, subtitles_id FROM movies ORDER BY code")
-        rows = cursor.fetchall()
-        return jsonify([{"code": r["code"], "title": r["title"], "year": r["year"], "subtitles_id": r["subtitles_id"]} for r in rows])
-    except Exception as e:
-        return jsonify([]), 500
-
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     try:
         update = request.get_json()
         if update:
-            logging.info(f"Received update: {update.get('update_id')}")
             process_update(update)
         return jsonify({'status': 'ok'})
     except Exception as e:
@@ -531,11 +284,11 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "🎬 Movie Bot is running 24/7!"
+    return "🎬 Movie Bot is running!"
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+    return jsonify({'status': 'healthy'})
 
 # ===== SETUP WEBHOOK =====
 def setup_webhook():
@@ -543,13 +296,11 @@ def setup_webhook():
         app_name = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
         if app_name != 'localhost':
             webhook_url = f"https://{app_name}/{TOKEN}"
-            response = requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", json={"url": webhook_url}, timeout=10)
-            if response.json().get("ok"):
-                logging.info(f"Webhook set to: {webhook_url}")
-            else:
-                logging.error(f"Failed to set webhook: {response.text}")
+            requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", 
+                         json={"url": webhook_url}, timeout=10)
+            logging.info(f"Webhook set to: {webhook_url}")
     except Exception as e:
-        logging.error(f"Webhook setup error: {e}")
+        logging.error(f"Webhook error: {e}")
 
 # ===== START =====
 if __name__ == "__main__":
