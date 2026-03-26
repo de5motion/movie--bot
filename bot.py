@@ -8,10 +8,10 @@ from flask import Flask, request, jsonify
 import requests
 
 # ===== CONFIGURATION =====
-TOKEN = "8660161351:AAGdM3sN3Sfi3zd8T0e_AOeFjhwAczQDyHw"
+TOKEN = "8616873829:AAF0BF9bx4R4wEcMzvhk24zD75Kl82Ieedo"
 PRIVATE_CHANNEL = -1003800629563
 PUBLIC_CHANNEL = "@englishmoviews"
-PUBLIC_CHANNEL2 = "@obshaga_life"
+ADMIN_PASSWORD = "admin123"
 
 # ===== INITIALIZE FLASK =====
 app = Flask(__name__)
@@ -22,7 +22,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ===== DATABASE =====
+# ===== GLOBAL DATABASE CONNECTION =====
 _db = None
 _db_lock = threading.Lock()
 
@@ -33,8 +33,57 @@ def get_db():
             if _db is None:
                 _db = sqlite3.connect('movies.db', check_same_thread=False)
                 _db.row_factory = sqlite3.Row
+                logging.info("Database connection established")
     return _db
 
+# ===== CACHE =====
+_movies_cache = {}
+_cache_time = 0
+_subscription_cache = {}
+_subscription_cache_time = {}
+
+def get_movie_cached(code):
+    global _movies_cache, _cache_time
+    now = time.time()
+    
+    if not _movies_cache or (now - _cache_time) > 300:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT code, message_id, title, year, subtitles_id FROM movies")
+        rows = cursor.fetchall()
+        _movies_cache = {row["code"]: row for row in rows}
+        _cache_time = now
+        logging.info(f"Cache updated with {len(_movies_cache)} movies")
+    
+    return _movies_cache.get(code.upper())
+
+def check_subscription_cached(user_id):
+    global _subscription_cache, _subscription_cache_time
+    now = time.time()
+    
+    if user_id in _subscription_cache:
+        if (now - _subscription_cache_time.get(user_id, 0)) < 60:
+            return _subscription_cache[user_id]
+    
+    result = check_subscription_real(user_id)
+    _subscription_cache[user_id] = result
+    _subscription_cache_time[user_id] = now
+    return result
+
+# ===== KEEP-ALIVE =====
+def keep_alive():
+    while True:
+        time.sleep(600)
+        try:
+            app_name = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
+            if app_name != 'localhost':
+                requests.get(f"https://{app_name}/health", timeout=5)
+        except:
+            pass
+
+threading.Thread(target=keep_alive, daemon=True).start()
+
+# ===== DATABASE INITIALIZATION =====
 def init_db():
     conn = get_db()
     cursor = conn.cursor()
@@ -69,29 +118,12 @@ def init_db():
             ("89", 9, "Wyrmwood: Apocalypse", 2021, 0),
         ]
         cursor.executemany("INSERT INTO movies VALUES (?, ?, ?, ?, ?)", movies)
+        logging.info("Initial movies added")
     
     conn.commit()
     logging.info("Database initialized")
 
 init_db()
-
-# ===== CACHE =====
-_movies_cache = {}
-_cache_time = 0
-
-def get_movie_cached(code):
-    global _movies_cache, _cache_time
-    now = time.time()
-    
-    if not _movies_cache or (now - _cache_time) > 300:
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT code, message_id, title, year, subtitles_id FROM movies")
-        rows = cursor.fetchall()
-        _movies_cache = {row["code"]: row for row in rows}
-        _cache_time = now
-    
-    return _movies_cache.get(code.upper())
 
 # ===== HELPER FUNCTIONS =====
 def send_message(chat_id, text, reply_markup=None):
@@ -105,14 +137,22 @@ def send_message(chat_id, text, reply_markup=None):
         logging.error(f"Error sending message: {e}")
         return None
 
-def send_movie(chat_id, message_id, title, code, year, subtitles_id=None):
+def send_movie_fast(chat_id, message_id, title, code, year, subtitles_id=None):
     url = f"https://api.telegram.org/bot{TOKEN}/copyMessage"
     
-    caption = f"🎬 *{title}* ({year})\n🔑 Code: `{code}`"
+    subtitles_instruction = (
+        "\n\n📝 *How to add subtitles:*\n"
+        "1️⃣ Download the .srt file from the next message\n"
+        "2️⃣ Open the video in Telegram\n"
+        "3️⃣ Tap the '⋮' (three dots) menu\n"
+        "4️⃣ Select 'Add subtitle'\n"
+        "5️⃣ Choose the downloaded .srt file\n\n"
+        "💡 *Alternative:* Use VLC or MX Player"
+    )
     
+    caption = f"🎬 *{title}* ({year})\n🔑 Code: `{code}`"
     if subtitles_id and subtitles_id != 0:
-        caption += "\n\n📝 *Subtitles* will be sent after the video.\n"
-        caption += "To add: open video → tap '⋮' → 'Add subtitle'"
+        caption += subtitles_instruction
     
     movie_data = {
         "chat_id": chat_id,
@@ -128,23 +168,22 @@ def send_movie(chat_id, message_id, title, code, year, subtitles_id=None):
             "chat_id": chat_id,
             "from_chat_id": PRIVATE_CHANNEL,
             "message_id": subtitles_id,
-            "caption": "📝 *Subtitles File*",
+            "caption": "📝 *Subtitles File*\n\nDownload and add to video player.",
             "parse_mode": "Markdown"
         }
         requests.post(url, json=sub_data, timeout=10)
+        logging.info(f"Subtitles sent for {code}")
     
     return result
 
-def check_subscription(user_id):
+def check_subscription_real(user_id):
     url = f"https://api.telegram.org/bot{TOKEN}/getChatMember"
     try:
         r1 = requests.get(url, params={"chat_id": PUBLIC_CHANNEL, "user_id": user_id}, timeout=10).json()
-        r2 = requests.get(url, params={"chat_id": PUBLIC_CHANNEL2, "user_id": user_id}, timeout=10).json()
-        
         sub1 = r1.get("ok") and r1["result"]["status"] in ["member", "administrator", "creator"]
-        sub2 = r2.get("ok") and r2["result"]["status"] in ["member", "administrator", "creator"]
-        return sub1 and sub2
-    except:
+        return sub1
+    except Exception as e:
+        logging.error(f"Subscription check error: {e}")
         return False
 
 def update_user_stats(user_id, username, first_name):
@@ -155,6 +194,18 @@ def update_user_stats(user_id, username, first_name):
         VALUES (?, ?, ?, COALESCE((SELECT requests_count + 1 FROM users WHERE user_id = ?), 1), ?)
     ''', (user_id, username, first_name, user_id, datetime.now()))
     conn.commit()
+
+def get_all_movies_cached():
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT code, title, year FROM movies ORDER BY code")
+    return cursor.fetchall()
+
+def get_user_stats_db(user_id):
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT requests_count, last_active FROM users WHERE user_id = ?", (user_id,))
+    return cursor.fetchone()
 
 # ===== PROCESS UPDATE =====
 def process_update(update):
@@ -182,7 +233,7 @@ def process_update(update):
                         chat_id,
                         f"🎬 *Welcome, {first_name}!*\n\n"
                         "🔍 *How to Get a Movie:*\n"
-                        "1️⃣ Subscribe to both channels\n"
+                        "1️⃣ Subscribe to our channel\n"
                         "2️⃣ Enter the movie code\n\n"
                         "👇 *Choose an action:*",
                         keyboard
@@ -192,22 +243,21 @@ def process_update(update):
                     code = text.upper()
                     movie = get_movie_cached(code)
                     
-                    if not check_subscription(user_id):
+                    if not check_subscription_cached(user_id):
                         keyboard = {
                             "inline_keyboard": [
-                                [{"text": "📢 Subscribe 1", "url": f"https://t.me/{PUBLIC_CHANNEL[1:]}"}],
-                                [{"text": "📢 Subscribe 2", "url": f"https://t.me/{PUBLIC_CHANNEL2[1:]}"}]
+                                [{"text": "📢 Subscribe", "url": f"https://t.me/{PUBLIC_CHANNEL[1:]}"}]
                             ]
                         }
                         send_message(
                             chat_id,
-                            f"❌ *Access Denied!*\n\nSubscribe to:\n{PUBLIC_CHANNEL}\n{PUBLIC_CHANNEL2}",
+                            f"❌ *Access Denied!*\n\nPlease subscribe to:\n{PUBLIC_CHANNEL}\n\nAfter subscribing, try again.",
                             keyboard
                         )
                         return
                     
                     if movie:
-                        result = send_movie(
+                        result = send_movie_fast(
                             chat_id, 
                             movie["message_id"], 
                             movie["title"], 
@@ -217,11 +267,11 @@ def process_update(update):
                         )
                         if result and result.get("ok"):
                             update_user_stats(user_id, username, first_name)
-                            logging.info(f"Movie {code} sent")
+                            logging.info(f"Movie {code} sent to user {user_id}")
                         else:
-                            send_message(chat_id, "❌ Error sending movie")
+                            send_message(chat_id, "❌ Error sending movie. Please try again later.")
                     else:
-                        send_message(chat_id, f"❌ *Invalid Code!*\n\nCode `{code}` not found.\n\nAvailable: 56, 12, 45, 22, 89")
+                        send_message(chat_id, f"❌ *Invalid Code!*\n\nCode `{code}` not found.\n\nAvailable codes: 56, 12, 45, 22, 89")
         
         elif "callback_query" in update:
             callback = update["callback_query"]
@@ -230,45 +280,55 @@ def process_update(update):
             user_id = callback["from"]["id"]
             
             if data == "get_movie":
-                send_message(chat_id, "🔍 *Enter movie code*\n\nAvailable: 56, 12, 45, 22, 89")
+                send_message(chat_id, "🔍 *Enter movie code*\n\nAvailable codes: 56, 12, 45, 22, 89")
             
             elif data == "stats":
-                conn = get_db()
-                cursor = conn.cursor()
-                cursor.execute("SELECT requests_count, last_active FROM users WHERE user_id = ?", (user_id,))
-                stats = cursor.fetchone()
+                stats = get_user_stats_db(user_id)
                 if stats:
-                    send_message(chat_id, f"📊 *Your Stats*\n\nMovies: {stats['requests_count']}")
+                    text = f"📊 *Your Stats*\n\nMovies received: {stats['requests_count']}\nLast active: {stats['last_active'][:19] if stats['last_active'] else 'Never'}"
                 else:
-                    send_message(chat_id, "📭 No stats yet")
+                    text = "📭 No statistics yet"
+                send_message(chat_id, text)
             
             elif data == "movies_list":
-                conn = get_db()
-                cursor = conn.cursor()
-                cursor.execute("SELECT code, title, year FROM movies ORDER BY code")
-                movies = cursor.fetchall()
+                movies = get_all_movies_cached()
                 if movies:
-                    text = "🎬 *Movies:*\n\n"
+                    text = "🎬 *Available Movies:*\n\n"
                     for row in movies:
-                        text += f"• {row['title']} ({row['year']}) - `{row['code']}`\n"
-                    send_message(chat_id, text)
+                        code = row["code"]
+                        title = row["title"]
+                        year = row["year"]
+                        if code in ["56", "12", "22"]:
+                            text += f"• {title} ({year}) - `{code}` ✅ (subtitles)\n"
+                        else:
+                            text += f"• {title} ({year}) - `{code}`\n"
                 else:
-                    send_message(chat_id, "📭 No movies")
+                    text = "📭 No movies available"
+                send_message(chat_id, text)
             
             elif data == "help":
-                text = "ℹ️ *Help*\n\n"
-                text += "📌 *Codes:*\n"
-                text += "• 56 - After (with subtitles)\n"
-                text += "• 12 - The Black Phone 2 (with subtitles)\n"
-                text += "• 45 - The Kissing Booth 1\n"
-                text += "• 22 - Sidelined (with subtitles)\n"
-                text += "• 89 - Wyrmwood\n\n"
-                text += "📢 *Subscribe to:*\n"
-                text += f"{PUBLIC_CHANNEL}\n{PUBLIC_CHANNEL2}"
+                text = "ℹ️ *Help & Instructions*\n\n"
+                text += "📌 *How to get a movie:*\n"
+                text += "1️⃣ Subscribe to our channel\n"
+                text += "2️⃣ Enter the movie code\n"
+                text += "3️⃣ Receive video + subtitles (if available)\n\n"
+                text += "🎬 *Available codes:*\n"
+                text += "• `56` - After (with subtitles)\n"
+                text += "• `12` - The Black Phone 2 (with subtitles)\n"
+                text += "• `45` - The Kissing Booth 1\n"
+                text += "• `22` - Sidelined: The QB and Me (with subtitles)\n"
+                text += "• `89` - Wyrmwood: Apocalypse\n\n"
+                text += "📝 *How to add subtitles:*\n"
+                text += "1️⃣ Download the .srt file\n"
+                text += "2️⃣ Open video → tap '⋮' → 'Add subtitle'\n"
+                text += "3️⃣ Select the downloaded file\n\n"
+                text += "📢 *Required channel:*\n"
+                text += f"• {PUBLIC_CHANNEL}\n\n"
+                text += "❓ Need help? Contact channel admins"
                 send_message(chat_id, text)
     
     except Exception as e:
-        logging.error(f"Error: {e}")
+        logging.error(f"Error processing update: {e}")
 
 # ===== FLASK ROUTES =====
 @app.route(f'/{TOKEN}', methods=['POST'])
@@ -276,6 +336,7 @@ def webhook():
     try:
         update = request.get_json()
         if update:
+            logging.info(f"Received update: {update.get('update_id')}")
             process_update(update)
         return jsonify({'status': 'ok'})
     except Exception as e:
@@ -284,11 +345,11 @@ def webhook():
 
 @app.route('/')
 def index():
-    return "🎬 Movie Bot is running!"
+    return "🎬 Movie Bot is running 24/7!"
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'healthy'})
+    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
 
 # ===== SETUP WEBHOOK =====
 def setup_webhook():
@@ -296,11 +357,13 @@ def setup_webhook():
         app_name = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
         if app_name != 'localhost':
             webhook_url = f"https://{app_name}/{TOKEN}"
-            requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", 
-                         json={"url": webhook_url}, timeout=10)
-            logging.info(f"Webhook set to: {webhook_url}")
+            response = requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", json={"url": webhook_url}, timeout=10)
+            if response.json().get("ok"):
+                logging.info(f"Webhook set to: {webhook_url}")
+            else:
+                logging.error(f"Failed to set webhook: {response.text}")
     except Exception as e:
-        logging.error(f"Webhook error: {e}")
+        logging.error(f"Webhook setup error: {e}")
 
 # ===== START =====
 if __name__ == "__main__":
