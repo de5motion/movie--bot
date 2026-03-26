@@ -13,7 +13,7 @@ TOKEN = "8660161351:AAGdM3sN3Sfi3zd8T0e_AOeFjhwAczQDyHw"
 PRIVATE_CHANNEL = -1003800629563
 PUBLIC_CHANNEL = "@englishmoviews"
 PUBLIC_CHANNEL2 = "@obshaga_life"
-ADMIN_PASSWORD = "admin123"  # Измените на свой пароль!
+ADMIN_PASSWORD = "admin123"
 
 # ===== INITIALIZE FLASK =====
 app = Flask(__name__)
@@ -24,12 +24,11 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-# ===== OPTIMIZATION: GLOBAL DATABASE CONNECTION =====
+# ===== GLOBAL DATABASE CONNECTION =====
 _db = None
 _db_lock = threading.Lock()
 
 def get_db():
-    """Get global database connection (single connection for performance)"""
     global _db
     if _db is None:
         with _db_lock:
@@ -39,19 +38,16 @@ def get_db():
                 logging.info("Database connection established")
     return _db
 
-# ===== OPTIMIZATION: CACHE =====
+# ===== CACHE =====
 _movies_cache = {}
 _cache_time = 0
 _subscription_cache = {}
 _subscription_cache_time = {}
 
 def get_movie_cached(code):
-    """Get movie from cache (updates every 5 minutes)"""
     global _movies_cache, _cache_time
-    
     now = time.time()
     
-    # Update cache every 5 minutes
     if not _movies_cache or (now - _cache_time) > 300:
         conn = get_db()
         cursor = conn.cursor()
@@ -64,42 +60,33 @@ def get_movie_cached(code):
     return _movies_cache.get(code.upper())
 
 def check_subscription_cached(user_id):
-    """Check subscription with cache (60 seconds)"""
     global _subscription_cache, _subscription_cache_time
-    
     now = time.time()
     
-    # Return cached result if fresh
     if user_id in _subscription_cache:
         if (now - _subscription_cache_time.get(user_id, 0)) < 60:
             return _subscription_cache[user_id]
     
-    # Check subscription
     result = check_subscription_real(user_id)
     _subscription_cache[user_id] = result
     _subscription_cache_time[user_id] = now
-    
     return result
 
-# ===== KEEP-ALIVE FOR RENDER =====
+# ===== KEEP-ALIVE =====
 def keep_alive():
-    """Ping bot every 10 minutes to prevent sleeping on free tier"""
     while True:
-        time.sleep(600)  # 10 minutes
+        time.sleep(600)
         try:
             app_name = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
             if app_name != 'localhost':
                 requests.get(f"https://{app_name}/health", timeout=5)
-                logging.info("Keep-alive ping sent")
-        except Exception as e:
-            logging.error(f"Keep-alive error: {e}")
+        except:
+            pass
 
-# Start keep-alive thread
 threading.Thread(target=keep_alive, daemon=True).start()
 
 # ===== DATABASE INITIALIZATION =====
 def init_db():
-    """Initialize database tables and data"""
     conn = get_db()
     cursor = conn.cursor()
     
@@ -138,32 +125,23 @@ def init_db():
     conn.commit()
     logging.info("Database initialized")
 
-# Initialize database
 init_db()
 
 # ===== HELPER FUNCTIONS =====
 def send_message(chat_id, text, reply_markup=None):
-    """Send a message via Telegram API"""
     url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-    data = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "Markdown"
-    }
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     if reply_markup:
         data["reply_markup"] = reply_markup
     try:
-        response = requests.post(url, json=data, timeout=10)
-        return response.json()
+        return requests.post(url, json=data, timeout=10).json()
     except Exception as e:
         logging.error(f"Error sending message: {e}")
         return None
 
 def send_movie_fast(chat_id, message_id, title, code, year, subtitles_id=None):
-    """Fast movie sending with subtitles"""
     url = f"https://api.telegram.org/bot{TOKEN}/copyMessage"
     
-    # Instructions for subtitles
     subtitles_instruction = (
         "\n\n📝 *How to add subtitles:*\n"
         "1️⃣ Download the .srt file from the next message\n"
@@ -178,7 +156,6 @@ def send_movie_fast(chat_id, message_id, title, code, year, subtitles_id=None):
     if subtitles_id and subtitles_id != 0:
         caption += subtitles_instruction
     
-    # Send movie
     movie_data = {
         "chat_id": chat_id,
         "from_chat_id": PRIVATE_CHANNEL,
@@ -188,7 +165,6 @@ def send_movie_fast(chat_id, message_id, title, code, year, subtitles_id=None):
     }
     result = requests.post(url, json=movie_data, timeout=15).json()
     
-    # Send subtitles if available
     if subtitles_id and subtitles_id != 0 and result.get("ok"):
         sub_data = {
             "chat_id": chat_id,
@@ -203,23 +179,18 @@ def send_movie_fast(chat_id, message_id, title, code, year, subtitles_id=None):
     return result
 
 def check_subscription_real(user_id):
-    """Actual subscription check (without cache)"""
     url = f"https://api.telegram.org/bot{TOKEN}/getChatMember"
-    
     try:
         r1 = requests.get(url, params={"chat_id": PUBLIC_CHANNEL, "user_id": user_id}, timeout=10).json()
         r2 = requests.get(url, params={"chat_id": PUBLIC_CHANNEL2, "user_id": user_id}, timeout=10).json()
-        
         sub1 = r1.get("ok") and r1["result"]["status"] in ["member", "administrator", "creator"]
         sub2 = r2.get("ok") and r2["result"]["status"] in ["member", "administrator", "creator"]
-        
         return sub1 and sub2
     except Exception as e:
         logging.error(f"Subscription check error: {e}")
         return False
 
 def update_user_stats(user_id, username, first_name):
-    """Update user statistics"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute('''
@@ -229,14 +200,12 @@ def update_user_stats(user_id, username, first_name):
     conn.commit()
 
 def get_all_movies_cached():
-    """Get all movies from cache"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT code, title, year FROM movies ORDER BY code")
     return cursor.fetchall()
 
 def get_user_stats_db(user_id):
-    """Get user statistics from database"""
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("SELECT requests_count, last_active FROM users WHERE user_id = ?", (user_id,))
@@ -244,7 +213,6 @@ def get_user_stats_db(user_id):
 
 # ===== PROCESS UPDATE =====
 def process_update(update):
-    """Process a Telegram update"""
     try:
         if "message" in update:
             message = update["message"]
@@ -371,7 +339,7 @@ def process_update(update):
     except Exception as e:
         logging.error(f"Error processing update: {e}")
 
-# ===== WEB PANEL HTML =====
+# ===== WEB PANEL =====
 ADD_MOVIE_FORM = '''
 <!DOCTYPE html>
 <html>
@@ -399,13 +367,7 @@ ADD_MOVIE_FORM = '''
         .subtitle { text-align: center; color: #666; margin-bottom: 30px; font-size: 14px; }
         .form-group { margin-bottom: 20px; }
         label { display: block; margin-bottom: 8px; color: #333; font-weight: 500; }
-        input, textarea {
-            width: 100%;
-            padding: 12px;
-            border: 2px solid #e0e0e0;
-            border-radius: 10px;
-            font-size: 16px;
-        }
+        input { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 10px; font-size: 16px; }
         input:focus { outline: none; border-color: #667eea; }
         button {
             width: 100%;
@@ -490,4 +452,107 @@ ADD_MOVIE_FORM = '''
             try {
                 const response = await fetch('/api/get_movies');
                 const movies = await response.json();
-         
+                const listDiv = document.getElementById('movieList');
+                if (movies.length === 0) listDiv.innerHTML = '<div class="movie-item">No movies yet</div>';
+                else listDiv.innerHTML = movies.map(m => `<div class="movie-item"><span class="movie-code">${m.code}</span> - ${m.title} (${m.year})${m.subtitles_id ? ' 📝' : ''}</div>`).join('');
+            } catch (error) {
+                document.getElementById('movieList').innerHTML = '<div class="movie-item">Error loading</div>';
+            }
+        }
+        loadMovies();
+    </script>
+</body>
+</html>
+'''
+
+# ===== FLASK ROUTES =====
+@app.route('/admin')
+def admin_panel():
+    return ADD_MOVIE_FORM
+
+@app.route('/api/add_movie', methods=['POST'])
+def api_add_movie():
+    try:
+        data = request.get_json()
+        
+        if data.get('password') != ADMIN_PASSWORD:
+            return jsonify({'status': 'error', 'message': 'Invalid password'}), 401
+        
+        code = data.get('code', '').upper()
+        message_id = data.get('message_id')
+        title = data.get('title')
+        year = data.get('year')
+        subtitles_id = data.get('subtitles_id', 0)
+        
+        if not all([code, message_id, title, year]):
+            return jsonify({'status': 'error', 'message': 'Missing required fields'}), 400
+        
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT OR REPLACE INTO movies (code, message_id, title, year, subtitles_id)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (code, message_id, title, year, subtitles_id))
+        conn.commit()
+        
+        global _movies_cache, _cache_time
+        _movies_cache = {}
+        _cache_time = 0
+        
+        logging.info(f"Movie added: {code} - {title}")
+        return jsonify({'status': 'ok', 'message': f'Movie "{title}" added with code {code}'})
+    
+    except Exception as e:
+        logging.error(f"Error adding movie: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@app.route('/api/get_movies')
+def api_get_movies():
+    try:
+        conn = get_db()
+        cursor = conn.cursor()
+        cursor.execute("SELECT code, title, year, subtitles_id FROM movies ORDER BY code")
+        rows = cursor.fetchall()
+        return jsonify([{"code": r["code"], "title": r["title"], "year": r["year"], "subtitles_id": r["subtitles_id"]} for r in rows])
+    except Exception as e:
+        return jsonify([]), 500
+
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    try:
+        update = request.get_json()
+        if update:
+            logging.info(f"Received update: {update.get('update_id')}")
+            process_update(update)
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return jsonify({'status': 'error'}), 500
+
+@app.route('/')
+def index():
+    return "🎬 Movie Bot is running 24/7!"
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+
+# ===== SETUP WEBHOOK =====
+def setup_webhook():
+    try:
+        app_name = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'localhost')
+        if app_name != 'localhost':
+            webhook_url = f"https://{app_name}/{TOKEN}"
+            response = requests.post(f"https://api.telegram.org/bot{TOKEN}/setWebhook", json={"url": webhook_url}, timeout=10)
+            if response.json().get("ok"):
+                logging.info(f"Webhook set to: {webhook_url}")
+            else:
+                logging.error(f"Failed to set webhook: {response.text}")
+    except Exception as e:
+        logging.error(f"Webhook setup error: {e}")
+
+# ===== START =====
+if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 5000))
+    setup_webhook()
+    app.run(host='0.0.0.0', port=port)
