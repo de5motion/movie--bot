@@ -46,9 +46,9 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM movies")
     if cursor.fetchone()[0] == 0:
         movies = [
-            ("56", 2, "After",2019),
-("12",3,"The black phone 2",2025),
-("45",4,"The kissing booth 1",2018),
+            ("56", 2, "After", 2019),
+            ("12", 3, "The Black Phone 2", 2025),
+            ("45", 4, "The Kissing Booth 1", 2018),
         ]
         cursor.executemany("INSERT INTO movies VALUES (?, ?, ?, ?)", movies)
     
@@ -177,8 +177,6 @@ def process_update(update):
                     send_message(
                         chat_id,
                         f"🎬 *Welcome, {first_name}!*\n\n"
-                        "📌 *Available Movies:*\n"
-                        "• `56` - After (2019)\n\n"
                         "🔍 *How to Get a Movie:*\n"
                         "1️⃣ Subscribe to our channel\n"
                         "2️⃣ Enter the movie code\n\n"
@@ -186,8 +184,8 @@ def process_update(update):
                         keyboard
                     )
                 
-                elif text.upper().startswith("INT"):
-                    # Handle movie code
+                else:
+                    # Handle movie code (any text that is not /start)
                     code = text.upper()
                     movie = get_movie(code)
                     
@@ -213,20 +211,16 @@ def process_update(update):
                         else:
                             send_message(chat_id, "❌ Error sending movie. Please try again later.")
                     else:
-                        send_message(chat_id, f"❌ *Invalid Code!*\n\nCode `{code}` not found.\nAvailable: INT001")
-                
-                else:
-                    send_message(chat_id, "❌ *Invalid command!*\n\nUse /start to see available commands.")
+                        send_message(chat_id, f"❌ *Invalid Code!*\n\nCode `{code}` not found.\n\nUse 'Movie List' button to see available codes.")
         
         elif "callback_query" in update:
             callback = update["callback_query"]
             chat_id = callback["message"]["chat"]["id"]
-            message_id = callback["message"]["message_id"]
             data = callback["data"]
             user_id = callback["from"]["id"]
             
             if data == "get_movie":
-                send_message(chat_id, "🔍 *Enter movie code*\n\nExample: INT001")
+                send_message(chat_id, "🔍 *Enter movie code*\n\nUse 'Movie List' button to see available codes.")
             
             elif data == "stats":
                 stats = get_user_stats(user_id)
@@ -246,7 +240,12 @@ def process_update(update):
                 send_message(chat_id, text)
             
             elif data == "help":
-                text = "ℹ️ *Help*\n\nEnter movie code (INT001) or use /start"
+                text = "ℹ️ *Help*\n\n📌 *How to get a movie:*\n"
+                text += "1️⃣ Subscribe to our channel\n"
+                text += "2️⃣ Enter the movie code\n"
+                text += "3️⃣ Or use 'Movie List' to see available codes\n\n"
+                text += "🎬 *Commands:*\n"
+                text += "/start - Main menu"
                 send_message(chat_id, text)
     
     except Exception as e:
