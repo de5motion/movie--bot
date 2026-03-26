@@ -113,11 +113,11 @@ def init_db():
     cursor.execute("SELECT COUNT(*) FROM movies")
     if cursor.fetchone()[0] == 0:
         movies = [
-            ("56", 2, "After", 2019, 12),
-            ("12", 3, "The Black Phone 2", 2025, 11),
-            ("45", 4, "The Kissing Booth 1", 2018, 0),
-            ("22", 10, "Sidelined: The QB and Me", 2024, 13),
-            ("89", 9, "Wyrmwood: Apocalypse", 2021, 0),
+            ("56",2, "After", 2019, 12),
+            ("12",3, "The Black Phone 2", 2025, 11),
+            ("45",4, "The Kissing Booth 1", 2018, 0),
+            ("22",10, "Sidelined: The QB and Me", 2024, 13),
+            ("89",9, "Wyrmwood: Apocalypse", 2021, 0),
         ]
         cursor.executemany("INSERT INTO movies VALUES (?, ?, ?, ?, ?)", movies)
         logging.info("Initial movies added")
