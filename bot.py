@@ -340,8 +340,15 @@ def health():
         return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 # ===== BOT THREAD FOR GUNICORN =====
+# ===== БЛОК ЗАПУСКА (ДОБАВЬТЕ ЭТО В КОНЕЦ ФАЙЛА) =====
+
+def run_flask():
+    """Run Flask app"""
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
+
 def run_bot():
-    """Run bot polling in background"""
+    """Run bot polling"""
     try:
         bot.remove_webhook()
         logging.info("Webhook removed, starting polling...")
@@ -349,11 +356,12 @@ def run_bot():
     except Exception as e:
         logging.error(f"Bot polling error: {e}")
 
-# Start bot thread when module loads (for gunicorn)
-bot_thread = threading.Thread(target=run_bot, daemon=True)
-bot_thread.start()
+# Запускаем Flask в отдельном потоке
+import threading
+flask_thread = threading.Thread(target=run_flask)
+flask_thread.daemon = True
+flask_thread.start()
 
-# ===== LOCAL DEVELOPMENT =====
+# Запускаем бота в главном потоке (или тоже в потоке)
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    run_bot()
