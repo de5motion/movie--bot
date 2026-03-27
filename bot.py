@@ -60,6 +60,7 @@ init_db()
 
 # ===== HELPER FUNCTIONS =====
 def send_movie(chat_id, message_id, title, code, year, description=""):
+    """Send a movie from private channel"""
     url = f"https://api.telegram.org/bot{TOKEN}/copyMessage"
     
     caption = f"🎬 <b>{title}</b> ({year})\n🔑 Code: <code>{code}</code>"
@@ -82,6 +83,7 @@ def send_movie(chat_id, message_id, title, code, year, description=""):
         return None
 
 def check_subscription(user_id):
+    """Check if user is subscribed"""
     try:
         member = bot.get_chat_member(PUBLIC_CHANNEL, user_id)
         return member.status in ["member", "administrator", "creator"]
@@ -90,6 +92,7 @@ def check_subscription(user_id):
         return False
 
 def update_user_stats(user_id, username, first_name):
+    """Update user statistics"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -111,6 +114,7 @@ def update_user_stats(user_id, username, first_name):
         return False
 
 def get_movie(code):
+    """Get movie from database"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -123,6 +127,7 @@ def get_movie(code):
         return None
 
 def get_all_movies():
+    """Get all movies from database"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -135,6 +140,7 @@ def get_all_movies():
         return []
 
 def get_user_stats(user_id):
+    """Get user statistics"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -278,6 +284,7 @@ def handle_callback(call):
 # ===== API ENDPOINTS =====
 @app.route('/add_movie', methods=['POST'])
 def add_movie_api():
+    """API endpoint to receive movies from helper bot"""
     try:
         data = request.get_json()
         
@@ -324,6 +331,7 @@ def index():
 
 @app.route('/health')
 def health():
+    """Health check"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -340,8 +348,6 @@ def health():
         return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
 # ===== BOT THREAD FOR GUNICORN =====
-# ===== БЛОК ЗАПУСКА (ДОБАВЬТЕ ЭТО В КОНЕЦ ФАЙЛА) =====
-
 def run_flask():
     """Run Flask app"""
     port = int(os.environ.get('PORT', 5000))
@@ -357,11 +363,10 @@ def run_bot():
         logging.error(f"Bot polling error: {e}")
 
 # Запускаем Flask в отдельном потоке
-import threading
 flask_thread = threading.Thread(target=run_flask)
 flask_thread.daemon = True
 flask_thread.start()
 
-# Запускаем бота в главном потоке (или тоже в потоке)
+# Запускаем бота в главном потоке
 if __name__ == "__main__":
     run_bot()
