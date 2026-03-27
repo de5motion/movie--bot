@@ -12,7 +12,7 @@ TOKEN = "8660161351:AAGdM3sN3Sfi3zd8T0e_AOeFjhwAczQDyHw"
 PRIVATE_CHANNEL = -1003800629563
 PUBLIC_CHANNEL = "@englishmoviews"
 ADMIN_ID = 6777360306
-API_SECRET = "movie_bot_secret_2024_67890"  # Must match helper bot
+API_SECRET = "movie_bot_secret_2024_67890"
 
 # ===== INITIALIZE =====
 bot = telebot.TeleBot(TOKEN)
@@ -60,7 +60,6 @@ init_db()
 
 # ===== HELPER FUNCTIONS =====
 def send_movie(chat_id, message_id, title, code, year, description=""):
-    """Send a movie from private channel"""
     url = f"https://api.telegram.org/bot{TOKEN}/copyMessage"
     
     caption = f"🎬 <b>{title}</b> ({year})\n🔑 Code: <code>{code}</code>"
@@ -83,7 +82,6 @@ def send_movie(chat_id, message_id, title, code, year, description=""):
         return None
 
 def check_subscription(user_id):
-    """Check if user is subscribed"""
     try:
         member = bot.get_chat_member(PUBLIC_CHANNEL, user_id)
         return member.status in ["member", "administrator", "creator"]
@@ -92,7 +90,6 @@ def check_subscription(user_id):
         return False
 
 def update_user_stats(user_id, username, first_name):
-    """Update user statistics"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -114,7 +111,6 @@ def update_user_stats(user_id, username, first_name):
         return False
 
 def get_movie(code):
-    """Get movie from database"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -127,7 +123,6 @@ def get_movie(code):
         return None
 
 def get_all_movies():
-    """Get all movies from database"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -140,7 +135,6 @@ def get_all_movies():
         return []
 
 def get_user_stats(user_id):
-    """Get user statistics"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -152,7 +146,7 @@ def get_user_stats(user_id):
         logging.error(f"Error getting user stats: {e}")
         return None
 
-# ===== TELEGRAM HANDLERS (POLLING) =====
+# ===== TELEGRAM HANDLERS =====
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
     user_id = message.from_user.id
@@ -276,16 +270,14 @@ def handle_callback(call):
                 reply_markup=keyboard
             )
     
-    # Answer callback query to remove loading state
     try:
         bot.answer_callback_query(call.id)
     except:
         pass
 
-# ===== API ENDPOINTS FOR HELPER BOT =====
+# ===== API ENDPOINTS =====
 @app.route('/add_movie', methods=['POST'])
 def add_movie_api():
-    """API endpoint to receive movies from helper bot"""
     try:
         data = request.get_json()
         
@@ -316,7 +308,7 @@ def add_movie_api():
         logging.info(f"✅ Movie added via API: {code} - {title}")
         
         try:
-            bot.send_message(ADMIN_ID, f"✅ Movie added via API\n\n🎬 {title} ({year})\n🔑 Code: {code}\n🆔 Msg ID: {message_id}")
+            bot.send_message(ADMIN_ID, f"✅ Movie added via API\n\n🎬 {title} ({year})\n🔑 Code: {code}")
         except:
             pass
         
@@ -326,27 +318,9 @@ def add_movie_api():
         logging.error(f"API error: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/health', methods=['GET'])
-def api_health():
-    """API health check"""
-    try:
-        conn = sqlite3.connect('movies.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM movies WHERE status = 'active'")
-        movie_count = cursor.fetchone()[0]
-        conn.close()
-        
-        return jsonify({
-            'status': 'healthy',
-            'movies_count': movie_count,
-            'api_secret_configured': True
-        })
-    except Exception as e:
-        return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
-
 @app.route('/')
 def index():
-    return "🎬 Movie Bot is running 24/7 with polling mode!"
+    return "🎬 Movie Bot is running 24/7!"
 
 @app.route('/health')
 def health():
@@ -365,27 +339,21 @@ def health():
     except Exception as e:
         return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
-# ===== MAIN: RUN FLASK + POLLING TOGETHER =====
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    
-    # Start Flask API in a separate thread
-    def run_flask():
-        app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
-    
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
-    flask_thread.start()
-    
-    logging.info(f"Flask API running on port {port}")
-    logging.info("Starting bot in polling mode...")
-    
-    # Remove any existing webhook before starting polling
+# ===== BOT THREAD FOR GUNICORN =====
+def run_bot():
+    """Run bot polling in background"""
     try:
         bot.remove_webhook()
-        logging.info("Webhook removed")
+        logging.info("Webhook removed, starting polling...")
+        bot.infinity_polling(timeout=30, long_polling_timeout=30)
     except Exception as e:
-        logging.error(f"Error removing webhook: {e}")
-    
-    # Start polling (main thread)
-    bot.infinity_polling(timeout=30, long_polling_timeout=30)
+        logging.error(f"Bot polling error: {e}")
+
+# Start bot thread when module loads (for gunicorn)
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+
+# ===== LOCAL DEVELOPMENT =====
+if __name__ == "__main__":
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
