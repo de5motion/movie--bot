@@ -8,7 +8,7 @@ import telebot
 from flask import Flask, request, jsonify
 
 # ===== CONFIGURATION =====
-TOKEN = "8660161351:AAGdM3sN3Sfi3zd8T0e_AOeFjhwAczQDyHw"
+TOKEN = "8616873829:AAF1N_drodK9ugzZ-7XD5sqlPe1DHbQ7bq4"  # НОВЫЙ токен
 PRIVATE_CHANNEL = -1003800629563
 PUBLIC_CHANNEL = "@englishmoviews"
 ADMIN_ID = 6777360306
@@ -60,7 +60,6 @@ init_db()
 
 # ===== HELPER FUNCTIONS =====
 def send_movie(chat_id, message_id, title, code, year, description=""):
-    """Send a movie from private channel"""
     url = f"https://api.telegram.org/bot{TOKEN}/copyMessage"
     
     caption = f"🎬 <b>{title}</b> ({year})\n🔑 Code: <code>{code}</code>"
@@ -83,7 +82,6 @@ def send_movie(chat_id, message_id, title, code, year, description=""):
         return None
 
 def check_subscription(user_id):
-    """Check if user is subscribed"""
     try:
         member = bot.get_chat_member(PUBLIC_CHANNEL, user_id)
         return member.status in ["member", "administrator", "creator"]
@@ -92,7 +90,6 @@ def check_subscription(user_id):
         return False
 
 def update_user_stats(user_id, username, first_name):
-    """Update user statistics"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -114,7 +111,6 @@ def update_user_stats(user_id, username, first_name):
         return False
 
 def get_movie(code):
-    """Get movie from database"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -127,7 +123,6 @@ def get_movie(code):
         return None
 
 def get_all_movies():
-    """Get all movies from database"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -140,7 +135,6 @@ def get_all_movies():
         return []
 
 def get_user_stats(user_id):
-    """Get user statistics"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -284,12 +278,10 @@ def handle_callback(call):
 # ===== API ENDPOINTS =====
 @app.route('/add_movie', methods=['POST'])
 def add_movie_api():
-    """API endpoint to receive movies from helper bot"""
     try:
         data = request.get_json()
         
         if not data or data.get('secret') != API_SECRET:
-            logging.warning(f"Unauthorized API access attempt from {request.remote_addr}")
             return jsonify({'error': 'Unauthorized'}), 401
         
         code = data.get('code')
@@ -331,7 +323,6 @@ def index():
 
 @app.route('/health')
 def health():
-    """Health check"""
     try:
         conn = sqlite3.connect('movies.db')
         cursor = conn.cursor()
@@ -347,9 +338,8 @@ def health():
     except Exception as e:
         return jsonify({'status': 'unhealthy', 'error': str(e)}), 500
 
-# ===== BOT THREAD FOR GUNICORN =====
+# ===== RUN BOT IN BACKGROUND =====
 def run_bot():
-    """Run bot polling in background"""
     try:
         bot.remove_webhook()
         logging.info("Webhook removed, starting polling...")
@@ -357,14 +347,10 @@ def run_bot():
     except Exception as e:
         logging.error(f"Bot polling error: {e}")
 
-# Запускаем бота в фоновом потоке (для gunicorn)
+# Запускаем бота в фоне (для gunicorn)
 bot_thread = threading.Thread(target=run_bot, daemon=True)
 bot_thread.start()
 
-# Flask-приложение будет запущено gunicorn, НЕ вызываем app.run() вручную
-# Для локального запуска оставляем блок if __name__ == "__main__":
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    # Для локальной разработки: запускаем бота и Flask
-    run_bot()
     app.run(host='0.0.0.0', port=port, debug=False)
