@@ -441,6 +441,13 @@ def setup_webhook():
 
 # ===== START =====
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    setup_webhook()
-    app.run(host='0.0.0.0', port=port, debug=False)
+    # port = int(os.environ.get('PORT', 5000))
+    # setup_webhook()
+    # app.run(host='0.0.0.0', port=port, debug=False)
+    
+    # Временный режим polling
+    import threading
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=5000), daemon=True).start()
+    
+    # Здесь нужна функция для polling — но ваш код не поддерживает polling напрямую
+    # Проще пока вернуться к вебхуку, но с правильной диагностикой
