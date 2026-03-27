@@ -8,7 +8,7 @@ import telebot
 from flask import Flask, request, jsonify
 
 # ===== CONFIGURATION =====
-TOKEN = "8616873829:AAF1N_drodK9ugzZ-7XD5sqlPe1DHbQ7bq4"  # НОВЫЙ токен
+TOKEN = "8616873829:AAF1N_drodK9ugzZ-7XD5sqlPe1DHbQ7bq4"  # Новый токен основного бота
 PRIVATE_CHANNEL = -1003800629563
 PUBLIC_CHANNEL = "@englishmoviews"
 ADMIN_ID = 6777360306
@@ -153,7 +153,10 @@ def send_welcome(message):
     first_name = message.from_user.first_name
     
     movies = get_all_movies()
-    movie_list = "\n".join([f"• <code>{code}</code> - {title} ({year})" for code, title, year in movies[:5]])
+    if movies:
+        movie_list = "\n".join([f"• <code>{code}</code> - {title} ({year})" for code, title, year in movies[:10]])
+    else:
+        movie_list = "No movies available yet"
     
     keyboard = telebot.types.InlineKeyboardMarkup(row_width=1)
     keyboard.add(
@@ -183,7 +186,7 @@ def handle_movie_code(message):
     movie = get_movie(code)
     
     if not movie:
-        bot.reply_to(message, f"❌ <b>Invalid Code!</b>\n\nCode <code>{code}</code> not found.", parse_mode="HTML")
+        bot.reply_to(message, f"❌ <b>Invalid Code!</b>\n\nCode <code>{code}</code> not found.\nUse /start to see available codes.", parse_mode="HTML")
         return
     
     if not check_subscription(user_id):
@@ -220,7 +223,7 @@ def handle_callback(call):
     data = call.data
     
     if data == "get_movie":
-        bot.send_message(call.message.chat.id, "🔍 <b>Enter movie code</b>\n\nExample: <code>12345</code>", parse_mode="HTML")
+        bot.send_message(call.message.chat.id, "🔍 <b>Enter movie code</b>\n\nExample: <code>1</code>", parse_mode="HTML")
     
     elif data == "stats":
         stats = get_user_stats(user_id)
@@ -253,8 +256,11 @@ def handle_callback(call):
         text += "🔹 <b>Requirements:</b>\n"
         text += f"• Subscribe to {PUBLIC_CHANNEL}\n\n"
         text += "📌 <b>Available codes:</b>\n"
-        for code, title, year in movies[:5]:
-            text += f"• <code>{code}</code> - {title}\n"
+        if movies:
+            for code, title, year in movies[:5]:
+                text += f"• <code>{code}</code> - {title}\n"
+        else:
+            text += "No movies available yet"
         bot.send_message(call.message.chat.id, text, parse_mode="HTML")
     
     elif data == "check_sub":
@@ -278,19 +284,21 @@ def handle_callback(call):
 # ===== API ENDPOINTS =====
 @app.route('/add_movie', methods=['POST'])
 def add_movie_api():
+    """API endpoint to receive movies from helper bot"""
     try:
         data = request.get_json()
         
         if not data or data.get('secret') != API_SECRET:
+            logging.warning(f"Unauthorized API access attempt from {request.remote_addr}")
             return jsonify({'error': 'Unauthorized'}), 401
         
-        code = data.get('code')
+        code = str(data.get('code'))
         message_id = data.get('message_id')
         title = data.get('title')
-        year = data.get('year')
+        year = data.get('year', 0)
         description = data.get('description', '')
         
-        if not all([code, message_id, title, year]):
+        if not all([code, message_id, title]):
             return jsonify({'error': 'Missing required fields'}), 400
         
         conn = sqlite3.connect('movies.db')
@@ -299,7 +307,7 @@ def add_movie_api():
         cursor.execute('''
             INSERT OR REPLACE INTO movies (code, message_id, title, year, description, status)
             VALUES (?, ?, ?, ?, ?, 'active')
-        ''', (code, message_id, title, year, description[:500]))
+        ''', (code, message_id, title, year if year else 0, description[:500]))
         
         conn.commit()
         conn.close()
@@ -307,7 +315,7 @@ def add_movie_api():
         logging.info(f"✅ Movie added via API: {code} - {title}")
         
         try:
-            bot.send_message(ADMIN_ID, f"✅ Movie added via API\n\n🎬 {title} ({year})\n🔑 Code: {code}")
+            bot.send_message(ADMIN_ID, f"✅ Movie added via API\n\n🎬 {title} ({year if year else 'N/A'})\n🔑 Code: {code}")
         except:
             pass
         
@@ -316,6 +324,101 @@ def add_movie_api():
     except Exception as e:
         logging.error(f"API error: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/restore', methods=['GET'])
+def restore_movies_endpoint():
+    """Restore movies from backup list"""
+    try:
+        # Список фильмов: (code, message_id, title, year)
+        movies_list = [
+            ("1", 33, "The Revenant", 2015),
+            ("2", 20, "Harry Potter and the Philosopher's Stone", 2001),
+            ("3", 21, "Harry Potter and the Chamber of Secrets", 2002),
+            ("4", 22, "Harry Potter and the Prisoner of Azkaban", 2004),
+            ("5", 27, "Harry Potter and the Goblet of Fire", 2005),
+            ("6", 28, "Harry Potter and the Order of the Phoenix", 2007),
+            ("7", 29, "Harry Potter and the Half-Blood Prince", 2009),
+            ("8", 30, "Harry Potter and the Deathly Hallows - Part 1", 2010),
+            ("9", 31, "Harry Potter and the Deathly Hallows - Part 2", 2011),
+            ("10", 54, "I Know What You Did Last Summer", 2025),
+            ("11", 51, "Jumanji: Welcome to the Jungle", 2017),
+            ("12", 3, "The Black Phone 2", 2025),
+            ("13", 43, "Gemini Man", 2019),
+            ("14", 40, "Fight Club", 1999),
+            ("22", 10, "Sidelined: The QB and Me", 2024),
+            ("45", 4, "The Kissing Booth 1", 2018),
+            ("56", 2, "After", 2019),
+            ("89", 9, "Wyrmwood: Apocalypse", 2021),
+            ("100", 19, "Catch Me If You Can", 2002),
+            ("101", 42, "Enola Holmes", 2020),
+        ]
+        
+        conn = sqlite3.connect('movies.db')
+        cursor = conn.cursor()
+        
+        restored = 0
+        failed = 0
+        
+        for code, message_id, title, year in movies_list:
+            try:
+                cursor.execute('''
+                    INSERT OR REPLACE INTO movies (code, message_id, title, year, description, status)
+                    VALUES (?, ?, ?, ?, ?, 'active')
+                ''', (code, message_id, title, year, ''))
+                restored += 1
+                logging.info(f"Restored: {title} ({year}) - Code: {code}")
+            except Exception as e:
+                failed += 1
+                logging.error(f"Failed to restore {title}: {e}")
+        
+        conn.commit()
+        
+        # Проверяем итоговое количество
+        cursor.execute("SELECT COUNT(*) FROM movies WHERE status = 'active'")
+        total = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        return jsonify({
+            'status': 'success',
+            'restored': restored,
+            'failed': failed,
+            'total_movies': total,
+            'message': f'Successfully restored {restored} movies. Total active movies: {total}'
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"Restore error: {e}")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
+
+@app.route('/movies/list', methods=['GET'])
+def list_movies():
+    """Get list of all movies"""
+    try:
+        conn = sqlite3.connect('movies.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT code, title, year, status FROM movies ORDER BY year DESC")
+        movies = cursor.fetchall()
+        conn.close()
+        
+        movies_list = []
+        for code, title, year, status in movies:
+            movies_list.append({
+                'code': code,
+                'title': title,
+                'year': year,
+                'status': status
+            })
+        
+        return jsonify({
+            'status': 'success',
+            'count': len(movies_list),
+            'movies': movies_list
+        }), 200
+        
+    except Exception as e:
+        logging.error(f"List movies error: {e}")
+        return jsonify({'status': 'error', 'error': str(e)}), 500
 
 @app.route('/')
 def index():
