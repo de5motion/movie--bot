@@ -1,125 +1,231 @@
 import logging
 import sqlite3
-import json
-import os
-import threading
+import re
+import random
 import requests
-import telebot
-import base64
-from datetime import datetime
 from flask import Flask, request, jsonify
+import os
 
-# ===== CONFIGURATION =====
-TOKEN = "8616873829:AAF1N_drodK9ugzZ-7XD5sqlPe1DHbQ7bq4"
-GITHUB_TOKEN = "1003800629563"  # Сюда вставьте НОВЫЙ токен
-REPO_NAME = "https://github.com/de5motion/movie--bot"           # Например: "myname/movie-bot"
-FILE_PATH = "movie_backup.json"
-PRIVATE_CHANNEL = -1003800629563
-PUBLIC_CHANNEL = "@englishmoviews"
+TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
+MAIN_BOT_API_URL = "https://movie-bot-7qmx.onrender.com/add_movie"
 API_SECRET = "movie_bot_secret_2024_67890"
+ADMIN_ID = 6777360306
+PRIVATE_CHANNEL = -1003800629563
 
-bot = telebot.TeleBot(TOKEN)
-app = Flask(__name__)
+app = Flask(name)
+logging.basicConfig(level=logging.INFO)
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-# ===== GITHUB AUTO-UPDATE (СПОСОБ 2) =====
-def update_github_backup(new_movie):
-    """Добавляет новый фильм прямо в файл на GitHub"""
-    url = f"https://api.github.com/repos/{REPO_NAME}/contents/{FILE_PATH}"
-    headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github.v3+json"}
-
-    try:
-        # 1. Получаем текущий файл с Гитхаба
-        res = requests.get(url, headers=headers)
-        if res.status_code == 200:
-            file_data = res.json()
-            sha = file_data['sha']
-            content = json.loads(base64.b64decode(file_data['content']).decode('utf-8'))
-            
-            # 2. Проверяем, нет ли уже такого кода, и добавляем
-            if not any(m['code'] == new_movie['code'] for m in content):
-                content.append(new_movie)
-                
-                # 3. Кодируем обратно и отправляем в GitHub
-                new_content_b64 = base64.b64encode(json.dumps(content, indent=2, ensure_ascii=False).encode('utf-8')).decode('utf-8')
-                payload = {
-                    "message": f"🎬 Auto-add: {new_movie['title']}",
-                    "content": new_content_b64,
-                    "sha": sha
-                }
-                requests.put(url, json=payload, headers=headers)
-                logging.info(f"✅ Фильм {new_movie['title']} сохранен на GitHub навсегда!")
-    except Exception as e:
-        logging.error(f"❌ Ошибка обновления GitHub: {e}")
-
-# ===== DATABASE LOGIC =====
 def init_db():
-    conn = sqlite3.connect('movies.db')
+    conn = sqlite3.connect('helper_movies.db')
     cursor = conn.cursor()
-    cursor.execute('CREATE TABLE IF NOT EXISTS movies (code TEXT PRIMARY KEY, message_id INTEGER, title TEXT, year INTEGER, status TEXT DEFAULT "active")')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_movies (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT,
+            message_id INTEGER,
+            title TEXT,
+            year INTEGER,
+            description TEXT,
+            channel_message_id INTEGER,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
-    auto_restore()
+init_db()
 
-def auto_restore():
-    if os.path.exists(FILE_PATH):
-        with open(FILE_PATH, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-        conn = sqlite3.connect('movies.db')
-        cursor = conn.cursor()
-        for m in data:
-            cursor.execute("INSERT OR REPLACE INTO movies VALUES (?, ?, ?, ?, 'active')", (str(m['code']), m['message_id'], m['title'], m.get('year', 0)))
-        conn.commit()
-        conn.close()
-        logging.info("🚀 База данных синхронизирована с JSON.")
+def send_message(chat_id, text, reply_markup=None):
+    url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
+    data = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        data["reply_markup"] = reply_markup
+    try:
+        requests.post(url, json=data, timeout=10)
+    except Exception as e:
+        logging.error(f"Send error: {e}")
 
-# ===== API FOR HELPER BOT =====
-@app.route('/add_movie', methods=['POST'])
-def add_movie():
-    data = request.get_json()
-    if not data or data.get('secret') != API_SECRET:
-        return jsonify({"error": "Unauthorized"}), 401
+def answer_callback(callback_id):
+    requests.post(f"https://api.telegram.org/bot{TOKEN}/answerCallbackQuery", json={"callback_query_id": callback_id})
+
+def generate_random_code():
+    """Генерирует случайный 2- или 3-значный код"""
+    return str(random.randint(10, 999))
+
+def extract_movie_info(text):
+    title = year = code = None
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line:
+            continue
+        
+        # Ищем код: Code: 12345
+        match = re.search(r'(?:Code|Код):?\s*(\d+)', line, re.IGNORECASE)
+        if match:
+            code = match.group(1)
+        
+        # Ищем год: (2024)
+        match = re.search(r'\((\d{4})\)', line)
+        if match and not year:
+            year = int(match.group(1))
+        
+        # Ищем название: первая непустая строка без эмодзи
+        if not title and line and not line.startswith(('🎬', '📺', 'Code', 'Код', 'Movie')):
+            title = line
     
-    new_movie = {
-        "code": str(data.get('code')),
-        "message_id": data.get('message_id'),
-        "title": data.get('title'),
-        "year": data.get('year', 0)
+    return title, year, code
+
+def save_pending_movie(code, message_id, title, year, description, channel_msg_id):
+    conn = sqlite3.connect('helper_movies.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO pending_movies (code, message_id, title, year, description, channel_message_id, status)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending')
+    ''', (code, message_id, title, year or 0, description, channel_msg_id))
+    conn.commit()
+    conn.close()
+
+def send_to_main_bot(code, message_id, title, year, description):
+    data = {
+        'secret': API_SECRET,
+        'code': code,
+        'message_id': message_id,
+        'title': title,
+        'year': year or 0,
+        'description': description
     }
+    try:
+        resp = requests.post(MAIN_BOT_API_URL, json=data, timeout=30)
+        return resp.status_code == 200, resp.text
+    except Exception as e:
+        return False, str(e)
 
-    # 1. Сначала в локальную базу (чтобы работало сразу)
-    conn = sqlite3.connect('movies.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO movies VALUES (?, ?, ?, ?, 'active')", (new_movie['code'], new_movie['message_id'], new_movie['title'], new_movie['year']))
-    conn.commit()
-    conn.close()
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+    try:
+        update = request.get_json()
+        logging.info(f"📩 Received update: {update}")
 
-    # 2. В фоновом режиме сохраняем на GitHub (чтобы не пропало после перезагрузки)
-    threading.Thread(target=update_github_backup, args=(new_movie,)).start()
+        if not update:
+            return 'ok', 200
+
+        # ===== СООБЩЕНИЯ ИЗ КАНАЛА =====
+        if 'channel_post' in update:
+            msg = update['channel_post']
+            chat_id = msg['chat']['id']
+            
+            logging.info(f"📢 Channel post from chat {chat_id}")
+            
+            if chat_id != PRIVATE_CHANNEL:
+                return 'ok', 200
+            
+            text = msg.get('text') or msg.get('caption', '')
+
+if not text:
+                return 'ok', 200
+            
+            # Извлекаем информацию
+            title, year, code = extract_movie_info(text)
+            
+            if not title:
+                logging.warning(f"Не удалось извлечь название: {text[:100]}")
+                return 'ok', 200
+            
+            # Если код не найден — генерируем случайный
+            if not code:
+                code = generate_random_code()
+                logging.info(f"🎲 Сгенерирован код {code} для фильма {title}")
+            
+            # Сохраняем как pending
+            save_pending_movie(code, msg['message_id'], title, year, text[:500], msg['message_id'])
+            
+            # Отправляем админу кнопки
+            keyboard = {
+                "inline_keyboard": [
+                    [{"text": "✅ Add Movie", "callback_data": f"add_{code}"}],
+                    [{"text": "❌ Cancel", "callback_data": f"cancel_{code}"}]
+                ]
+            }
+            send_message(ADMIN_ID,
+                f"📽 <b>Новый фильм в канале!</b>\n\n"
+                f"🎬 {title}\n"
+                f"📅 Год: {year if year else 'не указан'}\n"
+                f"🔑 Код: <code>{code}</code>\n\n"
+                f"Добавить в базу?",
+                reply_markup=keyboard)
+        
+        # ===== ОТВЕТ НА КНОПКИ =====
+        elif 'callback_query' in update:
+            q = update['callback_query']
+            user_id = q['from']['id']
+            if user_id != ADMIN_ID:
+                answer_callback(q['id'])
+                return 'ok', 200
+            
+            data = q['data']
+            action, code = data.split('_')
+            
+            conn = sqlite3.connect('helper_movies.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT title, year, message_id, description FROM pending_movies WHERE code=? AND status='pending'", (code,))
+            movie = cursor.fetchone()
+            if not movie:
+                send_message(ADMIN_ID, "❌ Фильм не найден.")
+                answer_callback(q['id'])
+                return 'ok', 200
+            title, year, msg_id, desc = movie
+            
+            if action == 'add':
+                ok, _ = send_to_main_bot(code, msg_id, title, year, desc)
+                if ok:
+                    cursor.execute("UPDATE pending_movies SET status='added' WHERE code=?", (code,))
+                    send_message(ADMIN_ID, f"✅ <b>{title}</b> добавлен в базу!\n🔑 Код: <code>{code}</code>")
+                else:
+                    send_message(ADMIN_ID, f"❌ Ошибка добавления <b>{title}</b>.")
+            else:
+                cursor.execute("UPDATE pending_movies SET status='cancelled' WHERE code=?", (code,))
+                send_message(ADMIN_ID, f"❌ <b>{title}</b> отменён.")
+            
+            conn.commit()
+            conn.close()
+            answer_callback(q['id'])
+        
+        # ===== ОБЫЧНЫЕ СООБЩЕНИЯ =====
+        elif 'message' in update:
+            msg = update['message']
+            user_id = msg['from']['id']
+            if user_id != ADMIN_ID:
+                return 'ok', 200
+            chat_id = msg['chat']['id']
+            if msg.get('text') == '/start':
+                send_message(chat_id,
+                    "🎬 <b>Helper Bot (авто-код)</b>\n\n"
+                    "Бот автоматически определяет новые фильмы в канале.\n"
+                    "Если код не указан — генерирует случайный (2-3 цифры).\n\n"
+                    "Просто отправь фильм в канал — я спрошу, добавлять или нет.")
+        
+        return 'ok', 200
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return 'error', 500
+
+@app.route('/')
+def index():
+    return "🎬 Helper Bot is running (auto-code)!"
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'})
+
+if name == "main":
+    port = int(os.environ.get('PORT', 5000))
+    webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
     
-    return jsonify({"status": "success"}), 200
-
-# ===== BOT HANDLERS =====
-@bot.message_handler(commands=['start'])
-def start(message):
-    bot.send_message(message.chat.id, "🎬 Отправь мне код фильма!")
-
-@bot.message_handler(func=lambda m: m.text.isdigit())
-def get_movie(message):
-    conn = sqlite3.connect('movies.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT message_id, title, year FROM movies WHERE code=?", (message.text,))
-    res = cursor.fetchone()
-    conn.close()
-
-    if res:
-        bot.copy_message(message.chat.id, PRIVATE_CHANNEL, res[0], caption=f"🎬 {res[1]} ({res[2]})")
-    else:
-        bot.reply_to(message, "❌ Код не найден.")
-
-# ===== RUN =====
-if __name__ == "__main__":
-    init_db()
-    threading.Thread(target=lambda: bot.infinity_polling(), daemon=True).start()
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    params = {
+        "url": webhook_url,
+        "allowed_updates": ["message", "channel_post", "callback_query"]
+    }
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params=params)
+    logging.info(f"✅ Webhook set to {webhook_url}")
+    
+    app.run(host='0.0.0.0', port=port)
