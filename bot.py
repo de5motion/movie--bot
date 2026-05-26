@@ -217,19 +217,22 @@ def index():
 def health():
     return jsonify({'status': 'healthy'})
 
-# Настройка вебхука при инициализации приложения в продакшене (Gunicorn)
-webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
+# --- ДИНАМИЧЕСКАЯ НАСТРОЙКА ВЕБХУКА ДЛЯ РЕНДЕРА ---
+# Render автоматически передаёт переменную RENDER_EXTERNAL_HOSTNAME
+render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'movie-bot-7-4r18.onrender.com')
+webhook_url = f"https://{render_host}/{TOKEN}"
+
 params = {
     "url": webhook_url,
     "allowed_updates": ["message", "channel_post", "callback_query"]
 }
 try:
     requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params=params, timeout=10)
-    logging.info(f"✅ Webhook configured to point to: {webhook_url}")
+    logging.info(f"✅ Webhook configured dynamically to: {webhook_url}")
 except Exception as e:
-    logging.error(f"❌ Could not automatically update Telegram webhook status: {e}")
+    logging.error(f"❌ Failed to set webhook on app startup: {e}")
 
-# Локальный запуск (игнорируется Gunicorn на Render)
+# Локальный запуск через терминал (игнорируется gunicorn на Render)
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
