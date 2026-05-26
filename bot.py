@@ -4,7 +4,7 @@ import requests
 from flask import Flask, request, jsonify
 import os
 
-TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY" # Токен Главного бота
+TOKEN = "8616873829:AAGEP-Oh5bME9QTGWsnbQP2Nw0cLC2LdsWc" # Токен Главного бота
 API_SECRET = "movie_bot_secret_2024_67890" # Пароль для связи с Хелпером
 PRIVATE_CHANNEL = -1003800629563 # Твой приватный канал
 
