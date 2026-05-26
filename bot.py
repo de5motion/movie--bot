@@ -1,14 +1,18 @@
 import logging
 import sqlite3
 import re
+import threading
+from flask import Flask, jsonify
 import telebot
+import os
 
 TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
 ADMIN_ID = 6777360306  # Твой Telegram ID
 PRIVATE_CHANNEL = -1003800629563
 
-# Инициализируем бота через telebot
+# Инициализируем бота и Flask
 bot = telebot.TeleBot(TOKEN, parse_mode='HTML')
+app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация базы данных SQLite
@@ -42,14 +46,11 @@ def handle_bulk_upload(message):
     for line in lines:
         line = line.strip()
         
-        # Пропускаем команду, пустые строки и заголовки списка
         if not line or line.startswith('/загрузка') or "Available Movies" in line:
             continue
         
-        # Убираем точку списка в начале строки
         line = line.lstrip('•').strip()
         
-        # Парсим строки формата: "Название фильма (Год) - Код" или "Название 🎥 (0) - Код"
         match = re.search(r'^(.*?)\s*(?:🎥)?\s*\((\d+)\)\s*-\s*(\d+)$', line)
         if match:
             title = match.group(1).strip()
@@ -89,7 +90,6 @@ def search_movie(message):
         m_title, m_year, m_desc, m_msg_id = movie
         clean_id = str(PRIVATE_CHANNEL).replace('-100', '')
         
-        # Если message_id равен 0 (после массовой загрузки), даем общую ссылку на канал
         if m_msg_id == 0:
             movie_link = f"https://t.me/c/{clean_id}"
         else:
@@ -103,19 +103,29 @@ def search_movie(message):
     else:
         bot.reply_to(message, "❌ Фильм с таким кодом не найден в базе.")
 
-# === ЕСЛИ ПОЛЬЗОВАТЕЛЬ СКИПНУЛ ШАБЛОН ===
 @bot.message_handler(func=lambda message: True)
 def handle_other_messages(message):
     bot.reply_to(message, "⚠️ Пожалуйста, отправьте корректный числовой код фильма (только цифры).")
 
-# Удаляем старый вебхук перед запуском, чтобы очистить пути для Telegram
-try:
-    telebot.TeleBot(TOKEN).delete_webhook()
-    logging.info("✅ Старый вебхук успешно удален. Переходим на Long Polling!")
-except Exception as e:
-    logging.error(f"Ошибка удаления вебхука: {e}")
+# === ЗАГЛУШКА ДЛЯ СЕРВЕРА RENDER (Чтобы не ругался на Port Binding) ===
+@app.route('/')
+def index():
+    return "Заглушка порта активна. Бот работает в фоне через Long Polling!", 200
 
-# Запуск постоянного опроса серверов Telegram
+# Функция запуска Long Polling в отдельном потоке
+def run_bot():
+    try:
+        telebot.TeleBot(TOKEN).delete_webhook()
+        logging.info("✅ Старый вебхук удален. Запуск Infinity Polling...")
+        bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    except Exception as e:
+        logging.error(f"Ошибка пуллинга: {e}")
+
 if __name__ == "__main__":
-    logging.info("🚀 Бот запущен в режиме Infinity Polling...")
-    bot.infinity_polling()
+    # 1. Запускаем бота в фоновом потоке
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread.start()
+    
+    # 2. Запускаем Flask-сервер на основном потоке для Render
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
