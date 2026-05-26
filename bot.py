@@ -12,7 +12,6 @@ API_SECRET = "movie_bot_secret_2024_67890"
 ADMIN_ID = 6777360306
 PRIVATE_CHANNEL = -1003800629563
 
-# Fix 1: Changed 'name' to '__name__'
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
@@ -122,7 +121,6 @@ def webhook():
             
             text = msg.get('text') or msg.get('caption', '')
 
-            # Fix 2: Correctly indented 'if not text:' blocks inside the handler
             if not text:
                 return 'ok', 200
             
@@ -219,16 +217,19 @@ def index():
 def health():
     return jsonify({'status': 'healthy'})
 
-# Fix 3: Changed 'name == "main"' to ' __name__ == "__main__"'
+# Настройка вебхука при инициализации приложения в продакшене (Gunicorn)
+webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
+params = {
+    "url": webhook_url,
+    "allowed_updates": ["message", "channel_post", "callback_query"]
+}
+try:
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params=params, timeout=10)
+    logging.info(f"✅ Webhook configured to point to: {webhook_url}")
+except Exception as e:
+    logging.error(f"❌ Could not automatically update Telegram webhook status: {e}")
+
+# Локальный запуск (игнорируется Gunicorn на Render)
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
-    webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
-    
-    params = {
-        "url": webhook_url,
-        "allowed_updates": ["message", "channel_post", "callback_query"]
-    }
-    requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params=params)
-    logging.info(f"✅ Webhook set to {webhook_url}")
-    
     app.run(host='0.0.0.0', port=port)
