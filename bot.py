@@ -12,7 +12,8 @@ API_SECRET = "movie_bot_secret_2024_67890"
 ADMIN_ID = 6777360306
 PRIVATE_CHANNEL = -1003800629563
 
-app = Flask(name)
+# Fix 1: Changed 'name' to '__name__'
+app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 def init_db():
@@ -121,7 +122,8 @@ def webhook():
             
             text = msg.get('text') or msg.get('caption', '')
 
-if not text:
+            # Fix 2: Correctly indented 'if not text:' blocks inside the handler
+            if not text:
                 return 'ok', 200
             
             # Извлекаем информацию
@@ -217,7 +219,8 @@ def index():
 def health():
     return jsonify({'status': 'healthy'})
 
-if name == "main":
+# Fix 3: Changed 'name == "main"' to ' __name__ == "__main__"'
+if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
     webhook_url = f"https://movie-helper-bot-1.onrender.com/{TOKEN}"
     
