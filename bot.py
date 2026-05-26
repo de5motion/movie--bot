@@ -1,17 +1,18 @@
 import logging
 import sqlite3
+import re
 import requests
 from flask import Flask, request, jsonify
 import os
 
-TOKEN = "8616873829:AAGEP-Oh5bME9QTGWsnbQP2Nw0cLC2LdsWc" # Токен Главного бота
-API_SECRET = "movie_bot_secret_2024_67890" # Пароль для связи с Хелпером
-PRIVATE_CHANNEL = -1003800629563 # Твой приватный канал
+TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
+API_SECRET = "movie_bot_secret_2024_67890"
+ADMIN_ID = 6777360306  # Твой Telegram ID
+PRIVATE_CHANNEL = -1003800629563
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# База данных именно Главного бота
 def init_db():
     conn = sqlite3.connect('main_movies.db')
     cursor = conn.cursor()
@@ -36,9 +37,7 @@ def send_message(chat_id, text):
     except Exception as e:
         logging.error(f"Ошибка отправки сообщения: {e}")
 
-# ========================================================
-# 1. ПРИЕМ ДАННЫХ ОТ ХЕЛПЕРА (По сети, скрытно от юзеров)
-# ========================================================
+# Прием одиночных фильмов от Хелпера
 @app.route('/add_movie', methods=['POST'])
 def add_movie():
     try:
@@ -50,7 +49,7 @@ def add_movie():
         title = data.get('title')
         year = data.get('year', 0)
         description = data.get('description', '')
-        message_id = data.get('message_id')
+        message_id = data.get('message_id', 0)
         
         conn = sqlite3.connect('main_movies.db')
         cursor = conn.cursor()
@@ -60,7 +59,6 @@ def add_movie():
                 VALUES (?, ?, ?, ?, ?)
             ''', (code, title, year, description, message_id))
             conn.commit()
-            logging.info(f"✅ Фильм '{title}' успешно добавлен в базу Главного бота.")
             conn.close()
             return jsonify({'status': 'success'}), 200
         except sqlite3.IntegrityError:
@@ -70,71 +68,114 @@ def add_movie():
         logging.error(f"Ошибка в /add_movie: {e}")
         return jsonify({'status': 'error'}), 500
 
-# ========================================================
-# 2. ФУНКЦИЯ ГЛАВНОГО БОТА (Общение с обычными людьми)
-# ========================================================
+# Основной вебхук (Пользователи + Твоя массовая загрузка)
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     try:
         update = request.get_json()
-        if not update:
+        if not update or 'message' not in update:
             return 'ok', 200
 
-        # Проверяем, что нам пришло именно текстовое сообщение в чат бота
-        if 'message' in update:
-            msg = update['message']
-            chat_id = msg['chat']['id']
-            text = msg.get('text', '').strip()
+        msg = update['message']
+        chat_id = msg['chat']['id']
+        user_id = msg['from']['id']
+        text = msg.get('text', '').strip()
 
-            if not text:
+        if not text:
+            return 'ok', 200
+
+        # === СЕКРЕТНАЯ МАССОВАЯ ЗАГРУЗКА ДЛЯ АДМИНА ===
+        if text.startswith('/загрузка') and user_id == ADMIN_ID:
+            lines = text.split('\n')[1:] # Пропускаем саму команду /загрузка
+            if not lines:
+                send_message(chat_id, "⚠️ Напишите фильмы под командой, каждый с новой строки!")
                 return 'ok', 200
-
-            # Команда /start
-            if text == '/start':
-                send_message(chat_id, "🎬 <b>Добро пожаловать!</b>\n\nОтправьте мне числовой <b>код фильма</b>, и я скину вам ссылку на него!")
-                return 'ok', 200
-
-            # Поиск фильма, если пользователь отправил код (цифры)
-            if text.isdigit():
-                conn = sqlite3.connect('main_movies.db')
-                cursor = conn.cursor()
-                cursor.execute("SELECT title, year, description, message_id FROM movies WHERE code=?", (text,))
-                movie = cursor.fetchone()
-                conn.close()
-
-                if movie:
-                    m_title, m_year, m_desc, m_msg_id = movie
-                    # Очищаем ID канала от "-100" для создания рабочей ссылки
-                    clean_id = str(PRIVATE_CHANNEL).replace('-100', '')
-                    movie_link = f"https://t.me/c/{clean_id}/{m_msg_id}"
-                    
-                    send_message(chat_id, 
-                        f"🎬 <b>{m_title} ({m_year})</b>\n\n"
-                        f"📝 {m_desc}\n\n"
-                        f"🍿 <a href='{movie_link}'>СМОТРЕТЬ ФИЛЬМ В КАНАЛЕ</a>")
+            
+            conn = sqlite3.connect('main_movies.db')
+            cursor = conn.cursor()
+            
+            added_count = 0
+            for line in lines:
+                line = line.strip('• ').strip()
+                if not line:
+                    continue
+                
+                # Регулярное выражение парсит строку вида: "Название Фильма (Год) - Код"
+                match = re.match(r'^(.*?)\s*\((\d{4})\)\s*-\s*(\d+)$', line)
+                if match:
+                    title = match.group(1).strip()
+                    year = int(match.group(2))
+                    code = match.group(3).strip()
                 else:
-                    send_message(chat_id, "❌ Увы, фильм с таким кодом не найден в базе.")
+                    # Если год равен 0: "Название Фильма (0) - Код"
+                    match_zero = re.match(r'^(.*?)\s*\(0\)\s*-\s*(\d+)$', line)
+                    if match_zero:
+                        title = match_zero.group(1).strip()
+                        year = 0
+                        code = match_zero.group(2).strip()
+                    else:
+                        continue # Если строка не подходит под формат, пропускаем её
+                
+                try:
+                    # Внимание: message_id ставим 0, так как при массовой загрузке точной ссылки на пост нет
+                    cursor.execute('''
+                        INSERT OR REPLACE INTO movies (code, title, year, description, message_id)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (code, title, year, f"Фильм: {title}", 0))
+                    added_count += 1
+                except Exception as e:
+                    logging.error(f"Ошибка добавления строки {line}: {e}")
+            
+            conn.commit()
+            conn.close()
+            send_message(chat_id, f"✅ Успешно восстановлено фильмов в базе: <b>{added_count}</b> шт.!")
+            return 'ok', 200
+
+        # === СТАНДАРТНЫЙ ПОИСК ДЛЯ ПОЛЬЗОВАТЕЛЕЙ ===
+        if text == '/start':
+            send_message(chat_id, "🎬 Добро пожаловать! Введите числовой код фильма.")
+            return 'ok', 200
+
+        if text.isdigit():
+            conn = sqlite3.connect('main_movies.db')
+            cursor = conn.cursor()
+            cursor.execute("SELECT title, year, description, message_id FROM movies WHERE code=?", (text,))
+            movie = cursor.fetchone()
+            conn.close()
+
+            if movie:
+                m_title, m_year, m_desc, m_msg_id = movie
+                clean_id = str(PRIVATE_CHANNEL).replace('-100', '')
+                
+                # Если message_id равен 0, даем ссылку просто на весь канал
+                if m_msg_id == 0:
+                    movie_link = f"https://t.me/c/{clean_id}"
+                else:
+                    movie_link = f"https://t.me/c/{clean_id}/{m_msg_id}"
+                
+                send_message(chat_id, 
+                    f"🎬 <b>{m_title} ({m_year if m_year != 0 else 'год не указан'})</b>\n\n"
+                    f"🍿 <a href='{movie_link}'>СМОТРЕТЬ ФИЛЬМ В КАНАЛЕ</a>")
             else:
-                send_message(chat_id, "⚠️ Пожалуйста, отправьте корректный числовой код фильма (только цифры).")
+                send_message(chat_id, "❌ Фильм с таким кодом не найден.")
+        else:
+            send_message(chat_id, "⚠️ Отправьте числовой код.")
 
         return 'ok', 200
     except Exception as e:
-        logging.error(f"Ошибка webhook Главного бота: {e}")
+        logging.error(f"Ошибка webhook: {e}")
         return 'error', 500
 
 @app.route('/')
 def index():
-    return "🎬 Главный Бот работает и готов отвечать пользователям!"
+    return "🎬 Бот работает и поддерживает массовую загрузку списков!"
 
-# Автоматический сброс и установка вебхука именно для работы с людьми
 render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'movie-bot-7qmx.onrender.com')
 webhook_url = f"https://{render_host}/{TOKEN}"
-
 try:
     requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params={"url": webhook_url, "allowed_updates": ["message"]}, timeout=10)
-    logging.info(f"✅ Вебхук Главного бота успешно направлен на: {webhook_url}")
 except Exception as e:
-    logging.error(f"❌ Не удалось обновить вебхук: {e}")
+    logging.error(f"Вебхук ошибка: {e}")
 
 if __name__ == "__main__":
     port = int(os.environ.get('PORT', 5000))
