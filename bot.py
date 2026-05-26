@@ -7,12 +7,13 @@ import os
 
 TOKEN = "8660161351:AAEGsV68gS860oepV0c1nAxPUkjvBiskWdY"
 API_SECRET = "movie_bot_secret_2024_67890"
-ADMIN_ID = 6777360306
+ADMIN_ID = 6777360306  # Твой Telegram ID
 PRIVATE_CHANNEL = -1003800629563
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
+# Инициализация базы данных
 def init_db():
     conn = sqlite3.connect('main_movies.db')
     cursor = conn.cursor()
@@ -37,6 +38,7 @@ def send_message(chat_id, text):
     except Exception as e:
         logging.error(f"Ошибка отправки сообщения: {e}")
 
+# 1. ПРИЕМ ФИЛЬМОВ ОТ ХЕЛПЕРА (По сети)
 @app.route('/add_movie', methods=['POST'])
 def add_movie():
     try:
@@ -67,6 +69,7 @@ def add_movie():
         logging.error(f"Ошибка в /add_movie: {e}")
         return jsonify({'status': 'error'}), 500
 
+# 2. ОБРАБОТКА ДЕЙСТВИЙ ПОЛЬЗОВАТЕЛЕЙ И АДМИНА
 @app.route(f'/{TOKEN}', methods=['POST'])
 def webhook():
     try:
@@ -82,7 +85,7 @@ def webhook():
         if not text:
             return 'ok', 200
 
-        # === УЛУЧШЕННАЯ МАССОВАЯ ЗАГРУЗКА ===
+        # === МАССОВАЯ ЗАГРУЗКА СПИСКА (Только для тебя) ===
         if text.startswith('/загрузка') and user_id == ADMIN_ID:
             lines = text.split('\n')
             
@@ -92,15 +95,15 @@ def webhook():
             added_count = 0
             for line in lines:
                 line = line.strip()
-                # Игнорируем саму команду, пустые строки и заголовок списка
-                if not line or text.startswith('/загрузка') and line == lines[0] or "Available Movies" in line:
+                
+                # Пропускаем команду, пустые строки и заголовки списка
+                if not line or line.startswith('/загрузка') or "Available Movies" in line:
                     continue
                 
-                # Очищаем маркеры списков
+                # Убираем точку списка в начале строки
                 line = line.lstrip('•').strip()
                 
-                # Сверхгибкий регулярный поиск: вытаскивает Название, Год (в скобках) и Код (после дефиса)
-                # Игнорирует любые эмодзи вроде 🎥
+                # Парсим строки формата: "Название фильма (Год) - Код" или "Название 🎥 (0) - Код"
                 match = re.search(r'^(.*?)\s*(?:🎥)?\s*\((\d+)\)\s*-\s*(\d+)$', line)
                 if match:
                     title = match.group(1).strip()
@@ -114,16 +117,16 @@ def webhook():
                         ''', (code, title, year, f"Фильм: {title}", 0))
                         added_count += 1
                     except Exception as e:
-                        logging.error(f"Ошибка добавления в БД: {e}")
+                        logging.error(f"Ошибка вставки в БД: {e}")
             
             conn.commit()
             conn.close()
             send_message(chat_id, f"✅ <b>Система восстановления:</b> успешно загружено <b>{added_count}</b> фильмов!")
             return 'ok', 200
 
-        # === ОБЫЧНЫЙ ПОИСК ===
+        # === СТАНДАРТНЫЙ ПОИСК ПО КОДУ ===
         if text == '/start':
-            send_message(chat_id, "🎬 Добро пожаловать! Введите числовой код фильма.")
+            send_message(chat_id, "🎬 Добро пожаловать!\n\nВведите числовой <b>код фильма</b>, чтобы получить ссылку.")
             return 'ok', 200
 
         if text.isdigit():
@@ -137,6 +140,7 @@ def webhook():
                 m_title, m_year, m_desc, m_msg_id = movie
                 clean_id = str(PRIVATE_CHANNEL).replace('-100', '')
                 
+                # Если message_id равен 0 (после массовой загрузки), даем общую ссылку на канал
                 if m_msg_id == 0:
                     movie_link = f"https://t.me/c/{clean_id}"
                 else:
@@ -146,26 +150,30 @@ def webhook():
                     f"🎬 <b>{m_title} ({m_year if m_year != 0 else 'год не указан'})</b>\n\n"
                     f"🍿 <a href='{movie_link}'>СМОТРЕТЬ ФИЛЬМ В КАНАЛЕ</a>")
             else:
-                send_message(chat_id, "❌ Фильм с таким кодом не найден.")
+                send_message(chat_id, "❌ Фильм с таким кодом не найден в базе.")
         else:
             send_message(chat_id, "⚠️ Пожалуйста, отправьте корректный числовой код фильма (только цифры).")
 
         return 'ok', 200
     except Exception as e:
-        logging.error(f"Ошибка webhook: {e}")
+        logging.error(f"Ошибка в webhook: {e}")
         return 'error', 500
 
 @app.route('/')
 def index():
-    return "🎬 Бот работает и поддерживает массовую загрузку списков!"
+    return "🎬 Главный Бот онлайн и готов к массовому восстановлению!"
 
-render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'movie-bot-7qmx.onrender.com')
+# Динамическое обновление вебхука под правильный адрес Render
+render_host = os.environ.get('RENDER_EXTERNAL_HOSTNAME', 'movie-bot-7-4r18.onrender.com')
 webhook_url = f"https://{render_host}/{TOKEN}"
+
 try:
+    requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook", timeout=10)
     requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params={"url": webhook_url, "allowed_updates": ["message"]}, timeout=10)
+    logging.info(f"✅ Вебхук перенаправлен на: {webhook_url}")
 except Exception as e:
-    logging.error(f"Вебхук ошибка: {e}")
+    logging.error(f"❌ Вебхук ошибка: {e}")
 
 if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
+    port = int(os.environ.get('PORT', 10000))  # Порт 10000 для Render
     app.run(host='0.0.0.0', port=port)
